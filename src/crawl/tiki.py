@@ -139,7 +139,7 @@ class State:
 
     def touch(self) -> None:
         self.dirty += 1
-        if self.dirty >= 100:
+        if self.dirty >= 20:
             self.save()
 
     def save(self) -> None:
