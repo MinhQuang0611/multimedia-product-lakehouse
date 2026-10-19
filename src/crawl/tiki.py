@@ -32,11 +32,23 @@ class Client:
         self.cfg = cfg
         self.s = requests.Session()
         self.s.headers.update({"User-Agent": cfg["user_agent"], "Accept": "application/json"})
-        # Listing bị WAF giới hạn chặt hơn detail (~25 request liên tiếp là bị chặn) nên có nhịp riêng.
         self.interval = {"default": cfg["min_interval"], "listing": cfg["listing_interval"]}
         self.last = {"default": 0.0, "listing": 0.0}
+        # WAF chặn listing sau ~25 request bất kể nhịp nhanh hay chậm, nên chia thành đợt rồi nghỉ.
+        self.burst = cfg["listing_burst"]
+        self.listing_used = 0
+        self.idle = None
         self.blocks = 0
         self.n = 0
+
+    def _rest(self, secs: float, why: str) -> None:
+        log.info("  %s, nghỉ listing %d phút%s", why, secs / 60, " (lấy detail trong lúc chờ)" if self.idle else "")
+        end = time.monotonic() + secs
+        if self.idle:
+            self.idle(end)
+        if end > time.monotonic():
+            time.sleep(end - time.monotonic())
+        self.listing_used = 0
 
     def _wait(self, kind: str) -> None:
         since = time.monotonic() - max(self.last.values())
@@ -48,8 +60,12 @@ class Client:
 
     def get(self, url: str, params: dict, kind: str = "default") -> dict | None:
         for attempt in range(5):
+            if kind == "listing" and self.listing_used >= self.burst:
+                self._rest(self.cfg["listing_pause"], f"đã dùng {self.listing_used} request listing")
             self._wait(kind)
             self.n += 1
+            if kind == "listing":
+                self.listing_used += 1
             try:
                 r = self.s.get(url, params=params, timeout=30)
             except requests.RequestException as e:
@@ -65,11 +81,14 @@ class Client:
                 self.blocks += 1
                 if self.blocks > self.cfg["max_blocks"]:
                     raise Blocked(f"bị chặn {self.blocks} lần, dừng — chạy lại sau sẽ tiếp tục từ chỗ dở")
-                self.interval[kind] = min(self.interval[kind] * 1.5, 60.0)
-                log.warning("  bị chặn (HTTP %s, %s) sau %d request, nghỉ %ds, nhịp %s → %.1fs",
-                            r.status_code, r.headers.get("content-type"), self.n, self.cfg["block_wait"],
-                            kind, self.interval[kind])
-                time.sleep(self.cfg["block_wait"])
+                log.warning("  bị chặn (HTTP %s, %s) ở request %s thứ %d", r.status_code,
+                            r.headers.get("content-type"), kind, self.listing_used if kind == "listing" else self.n)
+                if kind == "listing":
+                    self.burst = max(5, int(self.burst * 0.75))
+                    self._rest(self.cfg["block_wait"], f"giảm đợt listing còn {self.burst} request")
+                else:
+                    self.interval[kind] = min(self.interval[kind] * 1.5, 60.0)
+                    time.sleep(self.cfg["block_wait"])
                 continue
             log.warning("  HTTP %s cho %s, thử lại", r.status_code, url)
             time.sleep(10 * (attempt + 1))
@@ -189,13 +208,16 @@ def _progress(stage: str, i: int, n: int, t0: float) -> None:
         log.info("  %s %d/%d (%.2f req/s, còn ~%dm)", stage, i, n, i / el, eta / 60)
 
 
-def stage_detail(c: Client, out: Path, cfg: dict, st: State, today: date, limit: int | None) -> None:
+def stage_detail(c: Client, out: Path, cfg: dict, st: State, today: date, limit: int | None,
+                 deadline: float | None = None) -> None:
     prods = listing_products(out)
     todo = [p for pid, p in prods.items() if _stale(st["detail"].get(str(pid)), cfg["detail_refresh_days"], today)]
     todo = todo[:limit] if limit else todo
     log.info("  detail: %d/%d sản phẩm cần lấy", len(todo), len(prods))
     t0 = time.monotonic()
     for i, p in enumerate(todo, 1):
+        if deadline and time.monotonic() >= deadline:
+            return
         req = {"id": p["id"], "spid": p.get("seller_product_id")}
         res = c.get(f"{API}/products/{p['id']}", {"platform": "web", "spid": req["spid"]})
         if res is not None:
@@ -280,7 +302,10 @@ def run(stages: list[str] | None = None, limit: int | None = None, roots: list[i
         for s in stages or STAGES:
             log.info("[tiki] %s → %s", s, out)
             if s == "listing":
+                if "detail" in (stages or STAGES):
+                    c.idle = lambda end: stage_detail(c, out, cfg, st, today, limit, end)
                 stage_listing(c, out, cfg)
+                c.idle = None
             else:
                 globals()[f"stage_{s}"](c, out, cfg, st, today, limit)
     finally:

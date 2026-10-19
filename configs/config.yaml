@@ -53,7 +53,9 @@ crawl:
     roots: [931, 915, 1703, 1686, 976, 27616]
     user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"
     min_interval: 1.0        # giây giữa 2 request; burst ~100 req/s bị WAF chặn ~15 phút
-    listing_interval: 6.0    # /products listing: ~25 request liên tiếp ở 1 req/s đã bị chặn
+    listing_interval: 3.0
+    listing_burst: 20        # /products listing bị chặn sau đúng 25 request dù 1 req/s hay 6 s/request
+    listing_pause: 900       # nghỉ giữa các đợt listing; detail chạy trong lúc nghỉ
     block_wait: 1200
     max_blocks: 3
     detail_refresh_days: 7
