@@ -1,0 +1,17 @@
+set -euo pipefail
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-SQL
+    CREATE ROLE ${DW_USER} LOGIN PASSWORD '${DW_PASSWORD}';
+    CREATE DATABASE ${DW_DBNAME} OWNER ${DW_USER};
+    -- BI (Superset) chỉ đọc; quyền SELECT cấp theo schema trong 001_init_tables.sql.
+    CREATE ROLE ${DW_BI_USER} LOGIN PASSWORD '${DW_BI_PASSWORD}';
+    GRANT CONNECT ON DATABASE ${DW_DBNAME} TO ${DW_BI_USER};
+    CREATE ROLE airflow LOGIN PASSWORD '${AIRFLOW_DB_PASSWORD}';
+    CREATE DATABASE airflow OWNER airflow;
+    CREATE ROLE superset LOGIN PASSWORD '${SUPERSET_DB_PASSWORD}';
+    CREATE DATABASE superset OWNER superset;
+SQL
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$DW_DBNAME" <<-SQL
+    CREATE EXTENSION IF NOT EXISTS vector;
+SQL
