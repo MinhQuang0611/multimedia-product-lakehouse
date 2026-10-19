@@ -34,6 +34,36 @@ python run.py mine                 # → data/reports/olist/mining.md + hình
 
 Mọi bước đều idempotent: chạy lại thay thế nguyên khối bảng cũ, không nhân bản dữ liệu.
 
+## Crawl Tiki thời trang (nguồn D5)
+
+```bash
+python run.py crawl                          # listing → detail → sellers → reviews, tiếp tục từ chỗ dở nếu bị ngắt
+python -m src.crawl.tiki --roots 49372 --limit 3   # chạy thử trên một danh mục nhỏ
+python run.py bronze --only tiki             # data/raw/tiki/*/ → s3://lake/bronze/tiki/<loại>, phân vùng snapshot_date
+```
+
+Chạy ngầm hằng ngày (Windows Task Scheduler, 02:00, máy tắt thì chạy bù khi bật lại):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\register_tiki_task.ps1 -RunNow
+Get-ScheduledTaskInfo "BTL Tiki crawl"       # trạng thái, lần chạy tới
+Stop-ScheduledTask "BTL Tiki crawl"          # dừng lần đang chạy
+Unregister-ScheduledTask "BTL Tiki crawl"    # gỡ lịch
+```
+
+Log ở `data/_logs/tiki_crawl_<thời điểm>.log`. Chỉ một tiến trình crawl được chạy tại một thời điểm (khoá
+`data/raw/tiki/.lock`); DAG `tiki_daily_crawl` để chạy tay, không đặt lịch để khỏi trùng với Task Scheduler.
+
+| File (`data/raw/tiki/<ngày>/`) | Nội dung |
+|---|---|
+| `listing.jsonl.gz` | mỗi dòng một trang danh sách 40 sản phẩm: giá, giá gốc, rating, đã bán, seller |
+| `detail.jsonl.gz` | chi tiết sản phẩm mới hoặc quá 7 ngày: ảnh, biến thể size/màu, tồn kho, mô tả |
+| `sellers.jsonl.gz`, `reviews.jsonl.gz`, `categories.jsonl.gz` | shop; review của 2000 sản phẩm nhiều review nhất; cây danh mục |
+
+Giới hạn đo được: listing tối đa 2000 sản phẩm/truy vấn (crawler tự chia xuống danh mục con) và bị WAF chặn
+sau ~25 request bất kể nhịp, nên chạy theo đợt 20 request rồi nghỉ 15 phút, lấy detail trong lúc nghỉ. Khi bị
+chặn Tiki vẫn trả HTTP 200 với trang HTML. Review không lưu tên người mua, id người mua được băm.
+
 ## Hạ tầng Docker và nạp vào Data Warehouse
 
 ```bash

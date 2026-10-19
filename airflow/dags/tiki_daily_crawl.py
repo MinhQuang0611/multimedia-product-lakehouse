@@ -8,7 +8,9 @@ from airflow.sdk import dag, task
 @dag(
     dag_id="tiki_daily_crawl",
     description="Crawl Tiki thời trang (listing → detail → sellers → reviews) rồi nạp bronze/tiki",
-    schedule="0 2 * * *",
+    # Lịch hằng ngày do Windows Task Scheduler đảm nhận (scripts/register_tiki_task.ps1); DAG để chạy tay,
+    # tránh hai bên cùng crawl lúc 02:00.
+    schedule=None,
     start_date=datetime(2026, 10, 1),
     catchup=False,
     max_active_runs=1,

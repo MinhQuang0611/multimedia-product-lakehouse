@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import math
+import os
 import random
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -39,6 +40,7 @@ class Client:
         self.listing_used = 0
         self.idle = None
         self.blocks = 0
+        self.streak = 0
         self.n = 0
 
     def _rest(self, secs: float, why: str) -> None:
@@ -76,11 +78,13 @@ class Client:
                 return None
             # WAF trả trang challenge HTML với status 200 nên phải kiểm tra content-type.
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("application/json"):
+                self.streak = 0
                 return r.json()
             if r.status_code in (200, 403, 429):
                 self.blocks += 1
-                if self.blocks > self.cfg["max_blocks"]:
-                    raise Blocked(f"bị chặn {self.blocks} lần, dừng — chạy lại sau sẽ tiếp tục từ chỗ dở")
+                self.streak += 1
+                if self.streak > self.cfg["max_blocks"]:
+                    raise Blocked(f"bị chặn {self.streak} lần liên tiếp, dừng — lần chạy sau sẽ tiếp tục từ chỗ dở")
                 log.warning("  bị chặn (HTTP %s, %s) ở request %s thứ %d", r.status_code,
                             r.headers.get("content-type"), kind, self.listing_used if kind == "listing" else self.n)
                 if kind == "listing":
@@ -143,6 +147,23 @@ class State:
         tmp.write_text(json.dumps(self.d), encoding="utf-8")
         tmp.replace(self.path)
         self.dirty = 0
+
+
+def _lock(path: Path):
+    # Hai tiến trình crawl song song dùng chung quota listing và sẽ bị chặn ngay; khoá tự nhả khi tiến trình chết.
+    f = open(path, "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f
 
 
 def _total(paging: dict) -> int:
@@ -292,7 +313,13 @@ def run(stages: list[str] | None = None, limit: int | None = None, roots: list[i
     if roots:
         cfg["roots"] = roots
     root = paths().raw / "tiki"
-    today = datetime.now(timezone.utc).date()
+    root.mkdir(parents=True, exist_ok=True)
+    lock = _lock(root / ".lock")
+    if lock is None:
+        log.warning("[tiki] đang có tiến trình crawl khác chạy, bỏ qua lần này")
+        return
+    # Ngày theo giờ máy: lịch chạy 02:00 giờ VN vẫn là ngày hôm trước theo UTC.
+    today = date.today()
     out = root / today.isoformat()
     out.mkdir(parents=True, exist_ok=True)
     st = State(root / "_state.json")
@@ -310,6 +337,7 @@ def run(stages: list[str] | None = None, limit: int | None = None, roots: list[i
                 globals()[f"stage_{s}"](c, out, cfg, st, today, limit)
     finally:
         st.save()
+        lock.close()
         log.info("[tiki] %d request trong %.1f phút, bị chặn %d lần", c.n, (time.monotonic() - t0) / 60, c.blocks)
 
 
