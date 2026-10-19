@@ -78,8 +78,15 @@ class Client:
                 return None
             # WAF trả trang challenge HTML với status 200 nên phải kiểm tra content-type.
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("application/json"):
+                try:
+                    data = r.json()
+                except ValueError:
+                    # Thỉnh thoảng body rỗng/cụt dù header là JSON; coi như lỗi tạm thời.
+                    log.warning("  body không phải JSON (%d byte) cho %s, thử lại", len(r.content), url)
+                    time.sleep(10 * (attempt + 1))
+                    continue
                 self.streak = 0
-                return r.json()
+                return data
             if r.status_code in (200, 403, 429):
                 self.blocks += 1
                 self.streak += 1
