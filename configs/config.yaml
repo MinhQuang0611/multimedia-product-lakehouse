@@ -49,8 +49,8 @@ sources:
 
 crawl:
   tiki:
-    # Quần áo, giày, túi: Thời trang nữ/nam, Giày dép nữ/nam, Túi nữ/nam (~20k sản phẩm).
-    roots: [931, 915, 1703, 1686, 976, 27616]
+    # Thời trang nữ, Thời trang nam, Giày dép nam, Túi nam. Giày dép nữ (1703), túi nữ (976) không lấy.
+    roots: [931, 915, 1686, 27616]
     user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"
     min_interval: 1.0        # giây giữa 2 request; burst ~100 req/s bị WAF chặn ~15 phút
     listing_interval: 3.0
