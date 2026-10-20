@@ -124,11 +124,17 @@ class LakePath:
         return s3_client().get_object(Bucket=self._bucket, Key=self.key)["Body"].read().decode(encoding)
 
     def write_text(self, text: str, encoding: str = "utf-8") -> None:
+        self.write_bytes(text.encode(encoding))
+
+    def write_bytes(self, data: bytes, content_type: str | None = None) -> None:
         if not self.is_s3:
             self._local.parent.mkdir(parents=True, exist_ok=True)
-            self._local.write_text(text, encoding=encoding)
+            self._local.write_bytes(data)
             return
-        s3_client().put_object(Bucket=self._bucket, Key=self.key, Body=text.encode(encoding))
+        args = {"Bucket": self._bucket, "Key": self.key, "Body": data}
+        if content_type:
+            args["ContentType"] = content_type
+        s3_client().put_object(**args)
 
     def mkdir(self) -> None:
         if not self.is_s3:

@@ -1,18 +1,9 @@
-name: btl
+name: tiki-images
 channels:
   - conda-forge
 dependencies:
   - python=3.11
   - pip
-  - python-duckdb=1.*
-  - polars
-  - pandas
-  - pyarrow
-  - pyyaml
-  - tqdm
-  - matplotlib
-  - scikit-learn
-  - mlxtend
-  - jupyterlab
-  - pip:
-      - kaggle
+  - requests
+  - boto3
+  - pydantic-settings
