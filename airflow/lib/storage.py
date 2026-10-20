@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import os
 import shutil
 import time
@@ -7,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 from pathlib import Path, PurePosixPath
 
-from src.common.config import ROOT, load_config
+from lib.config import ROOT, load_config
 
 COPY_WORKERS = 16
 
@@ -50,7 +48,7 @@ class LakePath:
     def __init__(self, key: str = ""):
         self.key = str(PurePosixPath(key)) if key else ""
 
-    def __truediv__(self, part: str) -> LakePath:
+    def __truediv__(self, part: str) -> "LakePath":
         return LakePath(f"{self.key}/{part}" if self.key else part)
 
     def __repr__(self) -> str:
@@ -61,11 +59,11 @@ class LakePath:
         return PurePosixPath(self.key).name
 
     @property
-    def parent(self) -> LakePath:
+    def parent(self) -> "LakePath":
         p = str(PurePosixPath(self.key).parent)
         return LakePath("" if p == "." else p)
 
-    def with_name(self, name: str) -> LakePath:
+    def with_name(self, name: str) -> "LakePath":
         return self.parent / name
 
     @property
@@ -150,7 +148,7 @@ class LakePath:
             s3_client().delete_objects(Bucket=self._bucket,
                                        Delete={"Objects": [{"Key": k} for k in keys[i:i + 1000]]})
 
-    def replace(self, final: LakePath, attempts: int = 5) -> None:
+    def replace(self, final: "LakePath", attempts: int = 5) -> None:
         if not self.is_s3:
             for i in range(attempts):
                 try:

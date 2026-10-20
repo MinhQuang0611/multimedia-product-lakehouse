@@ -1,11 +1,16 @@
 import csv
 import hashlib
+import sys
 import zipfile
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import pandas as pd
 
-from src.common.config import get_logger, paths
+AIRFLOW_ROOT = Path(__file__).resolve().parents[2]
+if str(AIRFLOW_ROOT) not in sys.path:
+    sys.path.insert(0, str(AIRFLOW_ROOT))
+
+from lib.config import get_logger, paths
 
 log = get_logger("ingest.kaggle_images")
 

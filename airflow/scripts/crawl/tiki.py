@@ -11,7 +11,11 @@ from pathlib import Path
 
 import requests
 
-from src.common.config import get_logger, load_config, paths
+AIRFLOW_ROOT = Path(__file__).resolve().parents[2]
+if str(AIRFLOW_ROOT) not in sys.path:
+    sys.path.insert(0, str(AIRFLOW_ROOT))
+
+from lib.config import get_logger, load_config, paths
 
 log = get_logger("crawl.tiki")
 

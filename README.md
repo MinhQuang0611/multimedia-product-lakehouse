@@ -35,7 +35,7 @@ Danh mục crawl (`crawl_tiki_roots`, `crawl_tiki_exclude` trong `airflow/config
 `--forever` chạy mỗi ngày một snapshot; bị WAF chặn thì nghỉ `crawl_tiki_blocked_cooldown` giây rồi tiếp tục từ chỗ dở.
 
 ```bash
-PYTHONPATH=. python airflow/scripts/crawl/tiki.py --forever
+python airflow/scripts/crawl/tiki.py --forever
 cp deploy/tiki-crawl.service ~/.config/systemd/user/   # systemd user service, sửa đường dẫn nếu khác máy
 systemctl --user daemon-reload && systemctl --user enable --now tiki-crawl
 ```
@@ -46,8 +46,8 @@ Dùng làm dữ liệu đối chiếu cho tìm kiếm ảnh, đã lọc bỏ đ�
 Tải zip vào `data/raw/_zips/` (cần token Kaggle, xem `KAGGLE_API_TOKEN`) và CSV vào `data/raw/hm/`, `data/raw/shopee/`, rồi:
 
 ```bash
-PYTHONPATH=. python airflow/scripts/ingest/kaggle_images.py          # 256px → data/raw/{hm,shopee}/images/
-PYTHONPATH=. python airflow/scripts/ingest/kaggle_images.py --full   # ảnh gốc → images_full/
+python airflow/scripts/ingest/kaggle_images.py          # 256px → data/raw/{hm,shopee}/images/
+python airflow/scripts/ingest/kaggle_images.py --full   # ảnh gốc → images_full/
 ```
 
 ## Airflow

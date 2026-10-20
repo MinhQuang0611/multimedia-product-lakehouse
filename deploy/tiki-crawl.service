@@ -10,7 +10,6 @@ Wants=network-online.target
 
 [Service]
 WorkingDirectory=/home/ubuntu/Desktop/quangnm/DataWarehouse/multimedia-product-lakehouse
-Environment=PYTHONPATH=/home/ubuntu/Desktop/quangnm/DataWarehouse/multimedia-product-lakehouse
 ExecStart=/home/ubuntu/anaconda3/envs/btl/bin/python -u airflow/scripts/crawl/tiki.py --forever
 Restart=on-failure
 RestartSec=10min
