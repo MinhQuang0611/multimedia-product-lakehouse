@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import os
 import shutil
 import time
@@ -7,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 from pathlib import Path, PurePosixPath
 
-from src.common.config import ROOT, load_config
+from lib.config import ROOT, load_config
 
 COPY_WORKERS = 16
 

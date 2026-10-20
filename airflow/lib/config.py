@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import importlib.util
 import logging
 import sys
@@ -9,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.common.storage import LakePath
+    from lib.storage import LakePath
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -58,5 +56,5 @@ class Paths:
 
 
 def paths() -> Paths:
-    from src.common.storage import LakePath
+    from lib.storage import LakePath
     return Paths(raw=ROOT / load_config()["paths"]["raw"], lake=LakePath())
