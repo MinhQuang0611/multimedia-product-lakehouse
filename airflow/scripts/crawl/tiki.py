@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import gzip
 import hashlib
 import json
@@ -19,24 +17,21 @@ log = get_logger("crawl.tiki")
 
 API = "https://tiki.vn/api/v2"
 SELLER_API = "https://api.tiki.vn/product-detail/v2/widgets/seller"
-PAGE_SIZE = 40
+PAGE_SIZE = 40  # Tiki API listing page size.
 PAGE_CAP = 50
-STAGES = ["listing", "detail", "sellers", "reviews"]
+STAGES = ["listing", "detail", "images", "sellers", "reviews"]
 
 
 class Blocked(RuntimeError):
     pass
 
-
 class Client:
-
     def __init__(self, cfg: dict):
         self.cfg = cfg
         self.s = requests.Session()
         self.s.headers.update({"User-Agent": cfg["user_agent"], "Accept": "application/json"})
         self.interval = {"default": cfg["min_interval"], "listing": cfg["listing_interval"]}
         self.last = {"default": 0.0, "listing": 0.0}
-        # WAF chặn listing sau ~25 request bất kể nhịp nhanh hay chậm, nên chia thành đợt rồi nghỉ.
         self.burst = cfg["listing_burst"]
         self.listing_used = 0
         self.idle = None
@@ -128,7 +123,7 @@ class State:
     def __init__(self, path: Path):
         self.path = path
         self.d = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        for k in ("detail", "reviews", "sellers"):
+        for k in ("detail", "images", "reviews", "sellers"):
             self.d.setdefault(k, {})
         self.dirty = 0
 
@@ -228,6 +223,74 @@ def stage_detail(c: Client, out: Path, cfg: dict, st: State, today: date, limit:
             st["detail"][str(p["id"])] = today.isoformat()
             st.touch()
         _progress("detail", i, len(todo), t0)
+
+
+def detail_products(out: Path) -> dict[int, dict]:
+    """Return the latest detail payload for each product in this snapshot."""
+    products = {}
+    for row in read_lines(out / "detail.jsonl.gz"):
+        product_id = row.get("_req", {}).get("id")
+        if product_id is not None:
+            products[int(product_id)] = row.get("payload") or {}
+    return products
+
+
+def image_urls(payload: dict) -> list[str]:
+    urls = []
+    for key in ("thumbnail_url", "image_url"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.startswith("http"):
+            urls.append(value)
+    for image in payload.get("images") or []:
+        if isinstance(image, str):
+            candidates = [image]
+        elif isinstance(image, dict):
+            candidates = [image.get(k) for k in ("large_url", "url", "base_url", "thumbnail_url")]
+        else:
+            candidates = []
+        urls.extend(url for url in candidates if isinstance(url, str) and url.startswith("http"))
+    return list(dict.fromkeys(urls))
+
+
+def image_extension(url: str, content_type: str) -> str:
+    if "jpeg" in content_type or "jpg" in content_type:
+        return "jpg"
+    if "png" in content_type:
+        return "png"
+    if "webp" in content_type:
+        return "webp"
+    suffix = url.split("?", 1)[0].rsplit(".", 1)[-1].lower()
+    return suffix if suffix in {"jpg", "jpeg", "png", "webp", "gif"} else "jpg"
+
+
+def stage_images(c: Client, out: Path, cfg: dict, st: State, today: date, limit: int | None) -> None:
+    products = detail_products(out)
+    todo = [(pid, payload) for pid, payload in products.items()
+            if _stale(st["images"].get(str(pid)), cfg["image_refresh_days"], today)]
+    todo = todo[:limit] if limit else todo
+    log.info("  images: %d/%d products need downloading", len(todo), len(products))
+    t0 = time.monotonic()
+    for i, (product_id, payload) in enumerate(todo, 1):
+        saved = 0
+        for index, url in enumerate(image_urls(payload), 1):
+            try:
+                response = c.s.get(url, timeout=45)
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                log.warning("  image download failed for %s: %s", product_id, exc.__class__.__name__)
+                continue
+            content_type = response.headers.get("content-type", "").lower()
+            if not content_type.startswith("image/"):
+                log.warning("  non-image response for product %s", product_id)
+                continue
+            ext = image_extension(url, content_type)
+            target = paths().lake / "images" / "tiki" / today.isoformat() / str(product_id) / f"{index}.{ext}"
+            target.write_bytes(response.content, content_type.split(";", 1)[0])
+            saved += 1
+        if saved:
+            st["images"][str(product_id)] = today.isoformat()
+            st.touch()
+        _progress("images", i, len(todo), t0)
 
 
 def stage_sellers(c: Client, out: Path, cfg: dict, st: State, today: date, limit: int | None) -> None:

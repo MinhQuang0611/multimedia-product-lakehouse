@@ -1,19 +1,12 @@
-name: btl
+name: tiki-images
 channels:
   - conda-forge
 dependencies:
   - python=3.11
   - pip
-  - python-duckdb=1.*
-  - polars
-  - pandas
-  - pyarrow
-  - pyyaml
   - requests
-  - tqdm
-  - matplotlib
-  - scikit-learn
-  - mlxtend
-  - jupyterlab
+  - boto3
+  - pydantic-settings
+  - pandas          # airflow/scripts/ingest/kaggle_images.py
   - pip:
       - kaggle

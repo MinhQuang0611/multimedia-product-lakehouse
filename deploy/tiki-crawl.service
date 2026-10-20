@@ -4,13 +4,14 @@
 #   journalctl --user -u tiki-crawl -f
 # Cần `loginctl enable-linger $USER` để service chạy cả khi đã đăng xuất.
 [Unit]
-Description=Crawl Tiki (listing → detail → sellers → reviews) mỗi ngày một snapshot
+Description=Crawl Tiki (listing → detail → images → sellers → reviews) mỗi ngày một snapshot
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 WorkingDirectory=/home/ubuntu/Desktop/quangnm/DataWarehouse/multimedia-product-lakehouse
-ExecStart=/home/ubuntu/anaconda3/envs/btl/bin/python -u -m src.crawl.tiki --forever
+Environment=PYTHONPATH=/home/ubuntu/Desktop/quangnm/DataWarehouse/multimedia-product-lakehouse
+ExecStart=/home/ubuntu/anaconda3/envs/btl/bin/python -u airflow/scripts/crawl/tiki.py --forever
 Restart=on-failure
 RestartSec=10min
 # SIGTERM → crawler lưu _state.json trước khi thoát.
