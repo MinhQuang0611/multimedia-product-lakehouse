@@ -49,8 +49,10 @@ sources:
 
 crawl:
   tiki:
-    # Quần áo, giày, túi: Thời trang nữ/nam, Giày dép nữ/nam, Túi nữ/nam (~20k sản phẩm).
-    roots: [931, 915, 1703, 1686, 976, 27616]
+    # Chỉ đồ nam: Thời trang nam, Giày dép nam, Túi nam (~6k sản phẩm). Đã bỏ đồ nữ
+    # (931, 1703, 976) và danh mục nhạy cảm vì đây là đồ án nộp/trình bày.
+    roots: [915, 1686, 27616]
+    exclude: [27548, 16004]  # danh mục con không crawl: Đồ lót nam, Đồ bơi - Đồ đi biển nam
     user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"
     min_interval: 1.0        # giây giữa 2 request; burst ~100 req/s bị WAF chặn ~15 phút
     listing_interval: 3.0
@@ -58,10 +60,31 @@ crawl:
     listing_pause: 900       # nghỉ giữa các đợt listing; detail chạy trong lúc nghỉ
     block_wait: 1200
     max_blocks: 3
+    blocked_cooldown: 3600   # --forever: bị chặn quá max_blocks lần thì nghỉ chừng này giây rồi chạy lại
     detail_refresh_days: 7
     seller_refresh_days: 7
     review_products: 2000    # chỉ lấy review của N sản phẩm nhiều review nhất
     review_pages: 5          # 20 review/trang, mới nhất trước
+    image_workers: 8         # ảnh lấy từ CDN salt.tikicdn.com, không qua WAF của API
+
+# Ảnh sản phẩm (src/ingest/images.py): giải nén từ data/raw/_zips, bỏ đồ nữ và đồ nhạy cảm
+# cho đồng bộ với Tiki (đồ án nộp/trình bày). Đồ trẻ em giữ lại, trừ đồ lót/đồ bơi.
+images:
+  hm:
+    zip: hm256x256.zip                       # kaggle datasets download odins0n/hm256x256
+    zip_full: h-and-m-personalized-fashion-recommendations.zip  # ảnh gốc (28,7 GB), --full
+    keep_index_groups: [Menswear, Baby/Children, Sport]
+    drop_sections: [Ladies H&M Sport, Men Underwear, Boys Underwear & Basics, Girls Underwear & Basics,
+                    "Kids Accessories, Swimwear & D"]
+    drop_product_groups: [Underwear, Swimwear, Nightwear, Socks & Tights, Underwear/nightwear]
+  shopee:
+    zip: shopee-training-images-256px-jpg.zip  # kaggle datasets download xhlulu/shopee-training-images-256px-jpg
+    zip_full: shopee-product-matching.zip    # ảnh gốc (1,7 GB), --full; cần chấp nhận luật cuộc thi
+    # Tiêu đề tiếng Indonesia; không dùng "bh" (thường là "buah" = cái).
+    sensitive: "\\bbra\\b|bralette|celana dalam|underwear|lingerie|lingeri|bikini|baju renang|swimsuit|sexy|seksi|kondom|g-?string|thong|korset|bustier|\\bvibrat"
+    female_marker: "wanita|cewek|perempuan|ladies|women|muslimah|hamil|menyusui"
+    apparel: "baju|kaos|celana|kemeja|jaket|sweater|hoodie|setelan|piyama|tunik|cardigan|outer|blazer|kulot|legging|sepatu|sandal|\\btas\\b|dompet|atasan|bawahan|pakaian|busana"
+    female_garment: "\\bdress\\b|gamis|\\brok\\b|daster|blouse|hijab|jilbab|kerudung|pashmina|mukena|khimar|bergo|kebaya|heels|wedges"
 
 sampling:
   # Lấy mẫu theo KHÁCH HÀNG (không theo sản phẩm) để giữ nguyên giỏ hàng.

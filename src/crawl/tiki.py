@@ -5,6 +5,8 @@ import hashlib
 import json
 import math
 import random
+import signal
+import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -175,7 +177,8 @@ def stage_listing(c: Client, out: Path, cfg: dict) -> None:
                 append(out / "categories.jsonl.gz", {"parent_id": cat}, kids)
                 log.info("  %s cat %s: %s sp > cap, chia %d danh mục con", "  " * depth, cat, total, len(children))
                 for ch in children:
-                    walk(ch["id"], depth + 1)
+                    if ch["id"] not in cfg["exclude"]:
+                        walk(ch["id"], depth + 1)
                 return
             log.warning("  cat %s: %s sp nhưng không có danh mục con, chỉ lấy được %d", cat, total,
                         PAGE_SIZE * PAGE_CAP)
@@ -313,6 +316,26 @@ def run(stages: list[str] | None = None, limit: int | None = None, roots: list[i
         log.info("[tiki] %d request trong %.1f phút, bị chặn %d lần", c.n, (time.monotonic() - t0) / 60, c.blocks)
 
 
+def forever(stages: list[str] | None = None, roots: list[int] | None = None) -> None:
+    # Mỗi ngày (UTC) một snapshot listing; bị chặn thì nghỉ rồi chạy lại, tiếp tục từ chỗ dở.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # để finally của run() kịp lưu _state.json
+    cooldown = load_config()["crawl"]["tiki"]["blocked_cooldown"]
+    while True:
+        day = datetime.now(timezone.utc).date()
+        try:
+            run(stages, None, roots)
+        except Blocked as e:
+            log.warning("[tiki] %s; thử lại sau %d phút", e, cooldown / 60)
+            time.sleep(cooldown)
+            continue
+        # Lượt chạy kéo qua nửa đêm UTC thì vào ngay snapshot ngày mới, không bỏ mất ngày nào.
+        nxt = datetime.combine(day + timedelta(days=1), datetime.min.time(), timezone.utc)
+        wait = (nxt - datetime.now(timezone.utc)).total_seconds()
+        if wait > 0:
+            log.info("[tiki] xong snapshot %s, chờ tới %s UTC", day, nxt.strftime("%Y-%m-%d %H:%M"))
+            time.sleep(wait + 60)
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -320,5 +343,9 @@ if __name__ == "__main__":
     ap.add_argument("--stages", nargs="*", choices=STAGES)
     ap.add_argument("--limit", type=int, help="giới hạn số mục mỗi stage (chạy thử)")
     ap.add_argument("--roots", nargs="*", type=int, help="ghi đè danh mục gốc")
+    ap.add_argument("--forever", action="store_true", help="chạy mỗi ngày một lần, tự thử lại khi bị chặn")
     a = ap.parse_args()
-    run(a.stages, a.limit, a.roots)
+    if a.forever:
+        forever(a.stages, a.roots)
+    else:
+        run(a.stages, a.limit, a.roots)

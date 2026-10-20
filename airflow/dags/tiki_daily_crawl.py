@@ -17,13 +17,14 @@ from airflow.sdk import dag, task
 def tiki_daily_crawl():
 
     # Các stage chạy tuần tự vì dùng chung giới hạn tốc độ ~1 req/s; chạy song song sẽ bị WAF chặn.
-    def stage(name: str, hours: int):
-        @task(task_id=name, retries=1, retry_delay=timedelta(minutes=30),
+    # Bị chặn (Blocked) thì retry sau 1 giờ, crawler tiếp tục từ chỗ dở trong snapshot cùng ngày.
+    def stage(name: str, stages: list[str], hours: int):
+        @task(task_id=name, retries=4, retry_delay=timedelta(hours=1),
               execution_timeout=timedelta(hours=hours))
         def _run() -> None:
             from src.crawl import tiki
 
-            tiki.run([name])
+            tiki.run(stages)
 
         return _run()
 
@@ -36,7 +37,9 @@ def tiki_daily_crawl():
         for kind in TIKI_KINDS:
             load_tiki(con, kind, batch_id)
 
-    stage("listing", 2) >> stage("detail", 10) >> stage("sellers", 3) >> stage("reviews", 6) >> bronze()
+    # Listing ~600 request, đợt 20 request + nghỉ 15 phút ≈ 8 giờ; detail chạy trong lúc nghỉ nên chung một task.
+    (stage("listing_detail", ["listing", "detail"], 16) >> stage("sellers", ["sellers"], 3)
+     >> stage("reviews", ["reviews"], 6) >> bronze())
 
 
 tiki_daily_crawl()

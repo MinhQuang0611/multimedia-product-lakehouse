@@ -9,6 +9,7 @@ dependencies:
   - pandas
   - pyarrow
   - pyyaml
+  - requests
   - tqdm
   - matplotlib
   - scikit-learn

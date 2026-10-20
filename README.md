@@ -76,6 +76,28 @@ DAG **`gold_minio_to_postgres`** (Airflow → Trigger), hoặc `python run.py lo
 
 `python run.py olap | mine --only hm` đọc star schema `hm` từ Postgres.
 
+## Crawl Tiki tự động
+
+Crawler `src/crawl/tiki.py` ghi `data/raw/tiki/<ngày UTC>/{listing,detail,sellers,reviews,categories}.jsonl.gz`,
+mỗi ngày một snapshot listing; detail/seller làm mới sau 7 ngày, review khi `review_count` đổi
+(`configs/config.yaml` → `crawl.tiki`). Chạy lại luôn tiếp tục từ chỗ dở (`data/raw/tiki/_state.json`).
+
+```bash
+python -m src.crawl.tiki --stages sellers --limit 5   # chạy thử
+python -m src.crawl.tiki --forever                    # mỗi ngày một lượt; bị WAF chặn thì nghỉ 1 giờ rồi chạy lại
+```
+
+Hai cách chạy nền (chỉ dùng **một** cách, chạy song song sẽ bị chặn):
+
+- **Airflow**: DAG `tiki_daily_crawl` lúc 02:00 hằng ngày, `listing_detail → sellers → reviews → bronze`.
+- **Không có Docker** — systemd user service:
+  ```bash
+  cp deploy/tiki-crawl.service ~/.config/systemd/user/   # sửa đường dẫn nếu khác máy
+  systemctl --user daemon-reload && systemctl --user enable --now tiki-crawl
+  journalctl --user -u tiki-crawl -f                     # theo dõi
+  python run.py bronze --only tiki                       # nạp vào bronze/tiki khi cần
+  ```
+
 ## Cấu trúc lake (`s3://lake/` trên MinIO)
 
 | Tầng | Nội dung | Quy tắc |

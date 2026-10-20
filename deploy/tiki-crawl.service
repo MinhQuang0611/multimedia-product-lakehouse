@@ -1,0 +1,20 @@
+# Crawl Tiki chạy nền khi không dùng Airflow (systemd user service).
+#   cp deploy/tiki-crawl.service ~/.config/systemd/user/   (sửa WorkingDirectory/ExecStart nếu khác máy)
+#   systemctl --user daemon-reload && systemctl --user enable --now tiki-crawl
+#   journalctl --user -u tiki-crawl -f
+# Cần `loginctl enable-linger $USER` để service chạy cả khi đã đăng xuất.
+[Unit]
+Description=Crawl Tiki (listing → detail → sellers → reviews) mỗi ngày một snapshot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/ubuntu/Desktop/quangnm/DataWarehouse/multimedia-product-lakehouse
+ExecStart=/home/ubuntu/anaconda3/envs/btl/bin/python -u -m src.crawl.tiki --forever
+Restart=on-failure
+RestartSec=10min
+# SIGTERM → crawler lưu _state.json trước khi thoát.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target
