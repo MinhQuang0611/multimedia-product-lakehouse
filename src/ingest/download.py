@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -16,20 +18,44 @@ def _unzip_all(folder: Path) -> None:
         z.unlink()
 
 
+def _extract(z: Path, out: Path, prefix: str) -> None:
+    # Giải nén vào thư mục tạm rồi mới đổi tên: bị ngắt giữa chừng thì lần sau không tưởng là đã đủ ảnh.
+    tmp = out / ".extract_tmp"
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    with zipfile.ZipFile(z) as zf:
+        members = [m for m in zf.namelist() if m.startswith(prefix)]
+        log.info("  giải nén %d file %s từ %s", len(members), prefix, z.name)
+        zf.extractall(tmp, members)
+    os.replace(tmp / prefix.rstrip("/"), out / prefix.rstrip("/"))
+    shutil.rmtree(tmp)
+
+
 def download_source(name: str, spec: dict) -> None:
     from kaggle.api.kaggle_api_extended import KaggleApi  # import muộn: cần credentials
 
     api = KaggleApi()
     api.authenticate()
 
-    out = paths().raw / name
+    out = paths().raw / spec.get("dir", name)
     out.mkdir(parents=True, exist_ok=True)
     missing = [f for f in spec["files"] if not (out / f).exists()]
     if not missing:
         log.info("[%s] đã đủ file, bỏ qua", name)
         return
 
-    if spec["kind"] == "competition":
+    if spec.get("extract"):
+        zips = paths().raw / "_zips"
+        zips.mkdir(parents=True, exist_ok=True)
+        log.info("[%s] tải %s vào %s ...", name, spec["slug"], zips)
+        if spec["kind"] == "competition":
+            api.competition_download_files(spec["slug"], path=str(zips), quiet=False)
+        else:
+            api.dataset_download_files(spec["slug"], path=str(zips), quiet=False)
+        z = zips / f"{spec['slug'].split('/')[-1]}.zip"
+        _extract(z, out, spec["extract"])
+        z.unlink()
+    elif spec["kind"] == "competition":
         for f in missing:
             log.info("[%s] tải %s ...", name, f)
             api.competition_download_file(spec["slug"], f, path=str(out), quiet=False)

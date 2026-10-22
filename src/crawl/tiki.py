@@ -21,6 +21,9 @@ SELLER_API = "https://api.tiki.vn/product-detail/v2/widgets/seller"
 PAGE_SIZE = 40
 PAGE_CAP = 50
 STAGES = ["listing", "detail", "sellers", "reviews"]
+# Ba loại này chia file theo cây danh mục: <ngày>/<loại>/<gốc>/<con>/.../<danh mục>.jsonl.gz.
+# sellers, categories nhỏ và không gắn với một danh mục nên vẫn một file mỗi ngày.
+SPLIT_KINDS = ["listing", "detail", "reviews"]
 
 
 class Blocked(RuntimeError):
@@ -113,6 +116,7 @@ def _now() -> str:
 
 def append(path: Path, req: dict, payload) -> None:
     line = json.dumps({"_crawl_ts": _now(), "_req": req, "payload": payload}, ensure_ascii=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
     # Mỗi dòng là một gzip member riêng: bị ngắt giữa chừng chỉ hỏng dòng cuối.
     with open(path, "ab") as f:
         f.write(gzip.compress(line.encode("utf-8") + b"\n"))
@@ -130,6 +134,18 @@ def read_lines(path: Path):
                     return
     except (EOFError, gzip.BadGzipFile):
         return
+
+
+def node_name(cat: int, slug: str | None) -> str:
+    return f"{cat}-{slug}" if slug else str(cat)
+
+
+def cat_file(out: Path, kind: str, node: Path) -> Path:
+    return out / kind / node.parent / f"{node.name}.jsonl.gz"
+
+
+def kind_files(out: Path, kind: str) -> list[Path]:
+    return sorted((out / kind).rglob("*.jsonl.gz"))
 
 
 class State:
@@ -179,22 +195,25 @@ def _total(paging: dict) -> int:
 
 
 def stage_listing(c: Client, out: Path, cfg: dict) -> None:
-    f = out / "listing.jsonl.gz"
-    done = {(x["_req"]["category"], x["_req"]["page"]) for x in read_lines(f)}
+    done, firsts = set(), {}
+    for fp in kind_files(out, "listing"):
+        for x in read_lines(fp):
+            key = (x["_req"]["category"], x["_req"]["page"])
+            done.add(key)
+            if key[1] == 1:
+                firsts[key[0]] = x["payload"]
 
-    def page(cat: int, p: int) -> dict | None:
+    def page(node: Path, cat: int, p: int) -> dict | None:
         res = c.get(f"{API}/products", {"category": cat, "limit": PAGE_SIZE, "page": p}, "listing")
         if res is not None:
-            append(f, {"category": cat, "page": p}, res)
+            append(cat_file(out, "listing", node), {"category": cat, "page": p}, res)
             done.add((cat, p))
         return res
 
-    def walk(cat: int, depth: int) -> None:
-        first = None if (cat, 1) in done else page(cat, 1)
-        if first is None and (cat, 1) not in done:
-            return
+    def walk(node: Path, cat: int, depth: int) -> None:
+        first = firsts.get(cat) or page(node, cat, 1)
         if first is None:
-            first = next(x["payload"] for x in read_lines(f) if x["_req"] == {"category": cat, "page": 1})
+            return
         total = _total(first["paging"])
         if total > PAGE_SIZE * PAGE_CAP:
             kids = c.get(f"{API}/categories", {"parent_id": cat}, "listing")
@@ -203,25 +222,30 @@ def stage_listing(c: Client, out: Path, cfg: dict) -> None:
                 append(out / "categories.jsonl.gz", {"parent_id": cat}, kids)
                 log.info("  %s cat %s: %s sp > cap, chia %d danh mục con", "  " * depth, cat, total, len(children))
                 for ch in children:
-                    walk(ch["id"], depth + 1)
+                    walk(node / node_name(ch["id"], ch.get("url_key")), ch["id"], depth + 1)
                 return
             log.warning("  cat %s: %s sp nhưng không có danh mục con, chỉ lấy được %d", cat, total,
                         PAGE_SIZE * PAGE_CAP)
         last = min(first["paging"].get("last_page", 1), PAGE_CAP)
         for p in range(2, last + 1):
             if (cat, p) not in done:
-                page(cat, p)
+                page(node, cat, p)
         log.info("  %s cat %s: %s sp, %d trang", "  " * depth, cat, total, last)
 
-    for root in cfg["roots"]:
-        walk(root, 0)
+    for root, slug in cfg["roots"].items():
+        walk(Path(node_name(root, slug)), root, 0)
 
 
 def listing_products(out: Path) -> dict[int, dict]:
+    # Trang 1 của danh mục cha trùng sản phẩm với danh mục con: gán sản phẩm vào danh mục sâu nhất.
     prods = {}
-    for x in read_lines(out / "listing.jsonl.gz"):
-        for it in x["payload"].get("data") or []:
-            prods[it["id"]] = it
+    for fp in kind_files(out, "listing"):
+        rel = fp.relative_to(out / "listing")
+        for x in read_lines(fp):
+            for it in x["payload"].get("data") or []:
+                old = prods.get(it["id"])
+                if old is None or len(rel.parts) >= len(old["_file"].parts):
+                    prods[it["id"]] = {**it, "_file": rel}
     return prods
 
 
@@ -249,7 +273,7 @@ def stage_detail(c: Client, out: Path, cfg: dict, st: State, today: date, limit:
         req = {"id": p["id"], "spid": p.get("seller_product_id")}
         res = c.get(f"{API}/products/{p['id']}", {"platform": "web", "spid": req["spid"]})
         if res is not None:
-            append(out / "detail.jsonl.gz", req, res)
+            append(out / "detail" / p["_file"], req, res)
             st["detail"][str(p["id"])] = today.isoformat()
             st.touch()
         _progress("detail", i, len(todo), t0)
@@ -306,7 +330,7 @@ def stage_reviews(c: Client, out: Path, cfg: dict, st: State, today: date, limit
                 ok = False
                 break
             res["data"] = [scrub_review(r) for r in res.get("data") or []]
-            append(out / "reviews.jsonl.gz", req, res)
+            append(out / "reviews" / p["_file"], req, res)
             if pg >= (res.get("paging") or {}).get("last_page", 0):
                 break
         if ok:
@@ -318,7 +342,7 @@ def stage_reviews(c: Client, out: Path, cfg: dict, st: State, today: date, limit
 def run(stages: list[str] | None = None, limit: int | None = None, roots: list[int] | None = None) -> None:
     cfg = dict(load_config()["crawl"]["tiki"])
     if roots:
-        cfg["roots"] = roots
+        cfg["roots"] = {r: cfg["roots"].get(r) for r in roots}
     root = paths().raw / "tiki"
     root.mkdir(parents=True, exist_ok=True)
     lock = _lock(root / ".lock")

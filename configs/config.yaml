@@ -46,11 +46,28 @@ sources:
     kind: competition
     slug: shopee-product-matching
     files: [train.csv]
+  # Bộ ảnh: tải nguyên zip vào data/raw/_zips (bị ngắt thì tải tiếp), chỉ giải nén thư mục `extract`.
+  hm_images:
+    kind: dataset
+    slug: odins0n/hm256x256          # ảnh H&M thu nhỏ 256×256, tên file = article_id (2,3 GB)
+    dir: hm
+    files: [images_256_256]
+    extract: images_256_256/
+  shopee_images:
+    kind: competition
+    slug: shopee-product-matching
+    dir: shopee
+    files: [train_images]
+    extract: train_images/
 
 crawl:
   tiki:
-    # Thời trang nữ, Thời trang nam, Giày dép nam, Túi nam. Giày dép nữ (1703), túi nữ (976) không lấy.
-    roots: [931, 915, 1686, 27616]
+    # id: url_key (url_key chỉ để đặt tên thư mục). Giày dép nữ (1703), túi nữ (976) không lấy.
+    roots:
+      931: thoi-trang-nu
+      915: thoi-trang-nam
+      1686: giay-dep-nam
+      27616: tui-thoi-trang-nam
     user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"
     min_interval: 1.0        # giây giữa 2 request; burst ~100 req/s bị WAF chặn ~15 phút
     listing_interval: 3.0
@@ -62,6 +79,64 @@ crawl:
     seller_refresh_days: 7
     review_products: 2000    # chỉ lấy review của N sản phẩm nhiều review nhất
     review_pages: 5          # 20 review/trang, mới nhất trước
+
+  # Web riêng của các hãng: Haravan/Sapo/Shopify cùng mở /collections/all/products.json, không có WAF.
+  # Haravan có inventory_quantity theo biến thể và sole_quantity (số đã bán); Sapo chỉ có tồn kho; Shopify
+  # chỉ có available.
+  brands:
+    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"
+    min_interval: 1.0        # giây giữa 2 request tới CÙNG một site
+    workers: 6               # số site crawl song song
+    shopify_interval: 3.0    # các site Shopify chạy lần lượt, chung giới hạn theo IP
+    sites:
+      aristino: {domain: aristino.com, platform: haravan}
+      biluxury: {domain: biluxury.vn, platform: haravan}
+      kenta: {domain: kenta.vn, platform: haravan}
+      torano: {domain: torano.vn, platform: haravan}
+      icondenim: {domain: icondenim.com, platform: haravan}
+      pantio: {domain: pantio.vn, platform: haravan}
+      nem: {domain: nemshop.vn, platform: haravan}
+      evadeeva: {domain: evadeeva.com.vn, platform: haravan}
+      marc: {domain: marc.com.vn, platform: haravan}
+      chicland: {domain: chicland.vn, platform: haravan}
+      coupletx: {domain: coupletx.com, platform: haravan}
+      limeorange: {domain: limeorange.vn, platform: haravan}
+      cocosin: {domain: cocosin.vn, platform: haravan}
+      dottie: {domain: dottie.vn, platform: haravan}
+      hades: {domain: hades.vn, platform: haravan}
+      dirtycoins: {domain: dirtycoins.vn, platform: haravan}
+      degrey: {domain: degrey.vn, platform: haravan}
+      outerity: {domain: outerity.com, platform: haravan}
+      swe: {domain: swe.vn, platform: haravan}
+      dincox: {domain: dincox.com, platform: haravan}
+      bitis: {domain: bitis.com.vn, platform: haravan}
+      rabity: {domain: rabity.vn, platform: haravan}
+      teelab: {domain: teelab.vn, platform: sapo}
+      davies: {domain: davies.vn, platform: sapo}
+      clownz: {domain: clownz.vn, platform: sapo}
+      yame: {domain: yame.vn, platform: shopify}
+      stussy: {domain: www.stussy.com, platform: shopify}
+      gymshark: {domain: gymshark.com, platform: shopify}
+      everlane: {domain: www.everlane.com, platform: shopify}
+      allbirds: {domain: www.allbirds.com, platform: shopify}
+
+  # API nội bộ của web Zara (không phải API công khai). robots.txt cấm /*/status/*?ajax=true (tồn kho) nên
+  # không gọi; chỉ lấy danh mục và lưới sản phẩm theo danh mục.
+  zara:
+    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"
+    store: vn/vi             # cửa hàng Việt Nam, giá VND
+    sections: [WOMAN, MAN, KID]
+    min_interval: 2.0
+
+  # API nội bộ của web Uniqlo Mỹ (store vn đòi client id). Tồn kho theo SKU bị chặn trần ở 11 (= "11+").
+  uniqlo:
+    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"
+    store: us
+    lang: en
+    genders: {22210: women, 22211: men, 22212: kids, 22213: baby}
+    min_interval: 1.0
+    detail_refresh_days: 7
+    review_pages: 5          # 20 review/trang
 
 sampling:
   # Lấy mẫu theo KHÁCH HÀNG (không theo sản phẩm) để giữ nguyên giỏ hàng.

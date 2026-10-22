@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from src.common.config import connect, get_logger, load_config, new_batch_id, paths, sql_path
 from src.common.lake import write_table
+from src.crawl.tiki import SPLIT_KINDS
 
 log = get_logger("ingest.bronze")
 
@@ -79,12 +80,23 @@ def check_batch_drift(table: str, prev: dict | None, n: int, batch_id: str) -> N
 
 TIKI_KINDS = ["listing", "detail", "reviews", "sellers", "categories"]
 
+# Các nguồn crawl khác: (nguồn, bảng bronze, mẫu file trong data/raw/<nguồn>/).
+CRAWL_TABLES = [
+    ("brands", "products", "*/*.jsonl.gz"),
+    ("zara", "categories", "*/categories.jsonl.gz"),
+    ("zara", "products", "*/products/**/*.jsonl.gz"),
+    ("uniqlo", "listing", "*/listing/*.jsonl.gz"),
+    ("uniqlo", "stock", "*/stock/*.jsonl.gz"),
+    ("uniqlo", "details", "*/details/*.jsonl.gz"),
+    ("uniqlo", "reviews", "*/reviews/*.jsonl.gz"),
+]
 
-def load_tiki(con, kind: str, batch_id: str) -> int:
+
+def load_crawl(con, source: str, table: str, pattern: str, batch_id: str) -> int:
     # Crawl tích luỹ theo ngày: mỗi lần nạp lại toàn bộ snapshot, phân vùng theo ngày crawl.
     # Không kiểm tra batch drift vì bảng lớn dần theo số ngày đã crawl.
-    root = paths().raw / "tiki"
-    files = sorted(root.glob(f"*/{kind}.jsonl.gz"))
+    root = paths().raw / source
+    files = sorted(root.glob(pattern))
     if not files:
         return 0
     ingest_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -92,16 +104,22 @@ def load_tiki(con, kind: str, batch_id: str) -> int:
         SELECT _crawl_ts, CAST(_req AS VARCHAR) AS _req, CAST(payload AS VARCHAR) AS payload,
                TIMESTAMPTZ '{ingest_ts}' AS _ingest_ts,
                '{batch_id}' AS _batch_id,
-               regexp_extract(replace(filename, '\\', '/'), '(tiki/.*)$', 1) AS _source_file,
+               regexp_extract(replace(filename, '\\', '/'), '({source}/.*)$', 1) AS _source_file,
                regexp_extract(filename, '(\\d{{4}}-\\d{{2}}-\\d{{2}})', 1) AS snapshot_date
-        FROM read_json('{sql_path(root)}/*/{kind}.jsonl.gz', format='newline_delimited', filename=true,
+        FROM read_json('{sql_path(root)}/{pattern}', format='newline_delimited', filename=true,
                        columns={{'_crawl_ts': 'VARCHAR', '_req': 'JSON', 'payload': 'JSON'}})
     """
-    n = write_table(con, select, paths().bronze / "tiki" / kind, partition_by=["snapshot_date"],
-                    manifest={"source_file": f"tiki/*/{kind}.jsonl.gz", "files": len(files),
+    n = write_table(con, select, paths().bronze / source / table, partition_by=["snapshot_date"],
+                    manifest={"source_file": f"{source}/{pattern}", "files": len(files),
                               "batch_id": batch_id, "ingest_ts": ingest_ts})
-    log.info("  bronze/%-24s %12s dòng (%d ngày)", f"tiki/{kind}", f"{n:,}", len(files))
+    days = len({f.relative_to(root).parts[0] for f in files})
+    log.info("  bronze/%-24s %12s dòng (%d file, %d ngày)", f"{source}/{table}", f"{n:,}", len(files), days)
     return n
+
+
+def load_tiki(con, kind: str, batch_id: str) -> int:
+    pattern = f"*/{kind}/**/*.jsonl.gz" if kind in SPLIT_KINDS else f"*/{kind}.jsonl.gz"
+    return load_crawl(con, "tiki", kind, pattern, batch_id)
 
 
 def run(only: list[str] | None = None) -> None:
@@ -115,3 +133,6 @@ def run(only: list[str] | None = None) -> None:
     if not only or "tiki" in only:
         for kind in TIKI_KINDS:
             load_tiki(con, kind, batch_id)
+    for source, table, pattern in CRAWL_TABLES:
+        if not only or source in only:
+            load_crawl(con, source, table, pattern, batch_id)

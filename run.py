@@ -13,9 +13,22 @@ def step_download(only):
     download.run(only)
 
 
+CRAWLERS = ["brands", "zara", "uniqlo", "tiki"]
+
+
 def step_crawl(only):
-    from src.crawl import tiki
-    tiki.run()
+    import importlib
+    from concurrent.futures import ThreadPoolExecutor
+
+    # Mỗi nguồn một host và một khoá riêng nên chạy song song; Tiki chậm nhất (nghỉ chờ WAF) không giữ chân nguồn khác.
+    names = [c for c in CRAWLERS if not only or c in only]
+    with ThreadPoolExecutor(len(names)) as ex:
+        futs = {c: ex.submit(importlib.import_module(f"src.crawl.{c}").run) for c in names}
+        for c, fu in futs.items():
+            try:
+                fu.result()
+            except Exception:
+                log.exception("[%s] crawl lỗi", c)
 
 
 def step_bronze(only):
@@ -59,7 +72,7 @@ STEPS = {"download": step_download, "crawl": step_crawl, "bronze": step_bronze, 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Pipeline BTL Data Lakehouse")
     ap.add_argument("step", choices=[*STEPS, "all"])
-    ap.add_argument("--only", nargs="*", help="giới hạn nguồn: hm olist shopee")
+    ap.add_argument("--only", nargs="*", help="giới hạn nguồn: hm olist shopee tiki brands zara uniqlo")
     args = ap.parse_args()
 
     # crawl chạy hàng giờ và theo lịch riêng (DAG tiki_daily_crawl) nên không nằm trong `all`.

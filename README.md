@@ -54,15 +54,54 @@ Unregister-ScheduledTask "BTL Tiki crawl"    # gỡ lịch
 Log ở `data/_logs/tiki_crawl_<thời điểm>.log`. Chỉ một tiến trình crawl được chạy tại một thời điểm (khoá
 `data/raw/tiki/.lock`); DAG `tiki_daily_crawl` để chạy tay, không đặt lịch để khỏi trùng với Task Scheduler.
 
+`listing`, `detail`, `reviews` chia file theo cây danh mục Tiki, ví dụ
+`data/raw/tiki/2026-10-19/detail/931-thoi-trang-nu/941-dam-vay-lien.jsonl.gz`. File `<gốc>.jsonl.gz` cạnh thư mục
+`<gốc>/` là trang 1 của danh mục cha (crawler đọc để biết có phải chia nhỏ không). Sản phẩm của detail/reviews nằm
+ở danh mục sâu nhất mà nó xuất hiện trong listing.
+
 | File (`data/raw/tiki/<ngày>/`) | Nội dung |
 |---|---|
-| `listing.jsonl.gz` | mỗi dòng một trang danh sách 40 sản phẩm: giá, giá gốc, rating, đã bán, seller |
-| `detail.jsonl.gz` | chi tiết sản phẩm mới hoặc quá 7 ngày: ảnh, biến thể size/màu, tồn kho, mô tả |
-| `sellers.jsonl.gz`, `reviews.jsonl.gz`, `categories.jsonl.gz` | shop; review của 2000 sản phẩm nhiều review nhất; cây danh mục |
+| `listing/<danh mục>/….jsonl.gz` | mỗi dòng một trang danh sách 40 sản phẩm: giá, giá gốc, rating, đã bán, seller |
+| `detail/<danh mục>/….jsonl.gz` | chi tiết sản phẩm mới hoặc quá 7 ngày: ảnh, biến thể size/màu, tồn kho, mô tả |
+| `reviews/<danh mục>/….jsonl.gz` | review của 2000 sản phẩm nhiều review nhất |
+| `sellers.jsonl.gz`, `categories.jsonl.gz` | shop; cây danh mục |
+
+Dữ liệu crawl trước khi chia theo danh mục (một file `listing.jsonl.gz`, `detail.jsonl.gz`, `reviews.jsonl.gz` mỗi
+ngày) chuyển sang định dạng mới bằng:
+
+```bash
+python -m src.crawl.tiki_split --dry-run     # chia thử vào thư mục tạm, in số dòng/số file, không đổi gì
+python -m src.crawl.tiki_split               # file cũ chuyển sang data/raw/tiki/_old_format/<ngày>/
+python -m src.crawl.tiki_split --delete-old  # hoặc xoá luôn file cũ
+```
+
+Script giữ nguyên từng dòng, kiểm tra số dòng trước và sau, dừng nếu đang có crawl chạy (khoá `.lock`), chạy lại
+an toàn (ngày đã chuyển bỏ qua, bị ngắt giữa bước ghi thì ghi nốt). `--root` để chỉ thư mục khác.
 
 Giới hạn đo được: listing tối đa 2000 sản phẩm/truy vấn (crawler tự chia xuống danh mục con) và bị WAF chặn
 sau ~25 request bất kể nhịp, nên chạy theo đợt 20 request rồi nghỉ 15 phút, lấy detail trong lúc nghỉ. Khi bị
 chặn Tiki vẫn trả HTTP 200 với trang HTML. Review không lưu tên người mua, id người mua được băm.
+
+## Crawl web hãng thời trang, Zara, Uniqlo
+
+```bash
+python run.py crawl                          # mọi nguồn song song: brands, zara, uniqlo, tiki
+python run.py crawl --only brands zara       # từng nguồn
+python -m src.crawl.brands --sites hades yame
+python -m src.crawl.zara --limit 3           # chạy thử
+python -m src.crawl.uniqlo --limit 3
+python run.py bronze --only brands zara uniqlo
+```
+
+| Nguồn | File (`data/raw/<nguồn>/<ngày>/`) | Nội dung |
+|---|---|---|
+| `brands` | `<site>.jsonl.gz`, mỗi dòng một trang `products.json` | 30 web hãng (Haravan/Sapo/Shopify, danh sách trong `config.yaml`): sản phẩm, biến thể size/màu, giá, giá gốc, ảnh; Haravan có thêm tồn kho thật và số đã bán |
+| `zara` | `categories.jsonl.gz`, `products/<woman\|man\|kid>/<id>-<slug>.jsonl.gz` | Zara Việt Nam (VND): cây danh mục, lưới sản phẩm theo danh mục, còn/hết hàng |
+| `uniqlo` | `listing/`, `stock/`, `details/`, `reviews/` — mỗi thư mục một file theo nhóm women/men/kids/baby | Uniqlo Mỹ (USD): tồn kho theo SKU (chặn trần 11), chi tiết 7 ngày/lần, review khi số review đổi (không lưu nickname) |
+
+Mỗi nguồn có khoá riêng `data/raw/<nguồn>/.lock`, chạy lại trong ngày thì tiếp tục từ chỗ dở. Zara và Uniqlo là API
+nội bộ của web (không phải API công khai) nên giữ nhịp 1–2 s/request; không gọi API tồn kho của Zara vì
+`robots.txt` cấm.
 
 ## Hạ tầng Docker và nạp vào Data Warehouse
 
