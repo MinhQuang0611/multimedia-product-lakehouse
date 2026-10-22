@@ -45,7 +45,7 @@ def load_config() -> dict:
                    "region": s.lake_s3_region, "use_ssl": s.lake_s3_use_ssl,
                    "access_key": s.lake_access_key, "secret_key": s.lake_secret_key},
         },
-        "crawl": {"tiki": s.tiki_crawl_config()},
+        "crawl": {source: s.crawl_config(source) for source in ("tiki", "brands", "zara", "uniqlo")},
     }
 
 

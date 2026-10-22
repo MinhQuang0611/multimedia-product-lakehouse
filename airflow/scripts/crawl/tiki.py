@@ -2,6 +2,7 @@ import gzip
 import hashlib
 import json
 import math
+import os
 import random
 import signal
 import sys
@@ -24,6 +25,9 @@ SELLER_API = "https://api.tiki.vn/product-detail/v2/widgets/seller"
 PAGE_SIZE = 40  # Tiki API listing page size.
 PAGE_CAP = 50
 STAGES = ["listing", "detail", "images", "sellers", "reviews"]
+# Ba loại này chia file theo cây danh mục: <ngày>/<loại>/<gốc>/<con>/.../<danh mục>.jsonl.gz.
+# sellers, categories nhỏ và không gắn với một danh mục nên vẫn một file mỗi ngày.
+SPLIT_KINDS = ["listing", "detail", "reviews"]
 
 
 class Blocked(RuntimeError):
@@ -40,6 +44,7 @@ class Client:
         self.listing_used = 0
         self.idle = None
         self.blocks = 0
+        self.streak = 0
         self.n = 0
 
     def _rest(self, secs: float, why: str) -> None:
@@ -77,11 +82,20 @@ class Client:
                 return None
             # WAF trả trang challenge HTML với status 200 nên phải kiểm tra content-type.
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("application/json"):
-                return r.json()
+                try:
+                    data = r.json()
+                except ValueError:
+                    # Thỉnh thoảng body rỗng/cụt dù header là JSON; coi như lỗi tạm thời.
+                    log.warning("  body không phải JSON (%d byte) cho %s, thử lại", len(r.content), url)
+                    time.sleep(10 * (attempt + 1))
+                    continue
+                self.streak = 0
+                return data
             if r.status_code in (200, 403, 429):
                 self.blocks += 1
-                if self.blocks > self.cfg["max_blocks"]:
-                    raise Blocked(f"bị chặn {self.blocks} lần, dừng — chạy lại sau sẽ tiếp tục từ chỗ dở")
+                self.streak += 1
+                if self.streak > self.cfg["max_blocks"]:
+                    raise Blocked(f"bị chặn {self.streak} lần liên tiếp, dừng — lần chạy sau sẽ tiếp tục từ chỗ dở")
                 log.warning("  bị chặn (HTTP %s, %s) ở request %s thứ %d", r.status_code,
                             r.headers.get("content-type"), kind, self.listing_used if kind == "listing" else self.n)
                 if kind == "listing":
@@ -103,6 +117,7 @@ def _now() -> str:
 
 def append(path: Path, req: dict, payload) -> None:
     line = json.dumps({"_crawl_ts": _now(), "_req": req, "payload": payload}, ensure_ascii=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
     # Mỗi dòng là một gzip member riêng: bị ngắt giữa chừng chỉ hỏng dòng cuối.
     with open(path, "ab") as f:
         f.write(gzip.compress(line.encode("utf-8") + b"\n"))
@@ -122,6 +137,18 @@ def read_lines(path: Path):
         return
 
 
+def node_name(cat: int, slug: str | None) -> str:
+    return f"{cat}-{slug}" if slug else str(cat)
+
+
+def cat_file(out: Path, kind: str, node: Path) -> Path:
+    return out / kind / node.parent / f"{node.name}.jsonl.gz"
+
+
+def kind_files(out: Path, kind: str) -> list[Path]:
+    return sorted((out / kind).rglob("*.jsonl.gz"))
+
+
 class State:
 
     def __init__(self, path: Path):
@@ -136,7 +163,7 @@ class State:
 
     def touch(self) -> None:
         self.dirty += 1
-        if self.dirty >= 100:
+        if self.dirty >= 20:
             self.save()
 
     def save(self) -> None:
@@ -146,28 +173,48 @@ class State:
         self.dirty = 0
 
 
+def _lock(path: Path):
+    # Hai tiến trình crawl song song dùng chung quota listing và sẽ bị chặn ngay; khoá tự nhả khi tiến trình chết.
+    f = open(path, "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f
+
+
 def _total(paging: dict) -> int:
     digits = "".join(ch for ch in str(paging.get("total_text", "")) if ch.isdigit())
     return int(digits) if digits else paging.get("total", 0)
 
 
 def stage_listing(c: Client, out: Path, cfg: dict) -> None:
-    f = out / "listing.jsonl.gz"
-    done = {(x["_req"]["category"], x["_req"]["page"]) for x in read_lines(f)}
+    done, firsts = set(), {}
+    for fp in kind_files(out, "listing"):
+        for x in read_lines(fp):
+            key = (x["_req"]["category"], x["_req"]["page"])
+            done.add(key)
+            if key[1] == 1:
+                firsts[key[0]] = x["payload"]
 
-    def page(cat: int, p: int) -> dict | None:
+    def page(node: Path, cat: int, p: int) -> dict | None:
         res = c.get(f"{API}/products", {"category": cat, "limit": PAGE_SIZE, "page": p}, "listing")
         if res is not None:
-            append(f, {"category": cat, "page": p}, res)
+            append(cat_file(out, "listing", node), {"category": cat, "page": p}, res)
             done.add((cat, p))
         return res
 
-    def walk(cat: int, depth: int) -> None:
-        first = None if (cat, 1) in done else page(cat, 1)
-        if first is None and (cat, 1) not in done:
-            return
+    def walk(node: Path, cat: int, depth: int) -> None:
+        first = firsts.get(cat) or page(node, cat, 1)
         if first is None:
-            first = next(x["payload"] for x in read_lines(f) if x["_req"] == {"category": cat, "page": 1})
+            return
         total = _total(first["paging"])
         if total > PAGE_SIZE * PAGE_CAP:
             kids = c.get(f"{API}/categories", {"parent_id": cat}, "listing")
@@ -177,25 +224,30 @@ def stage_listing(c: Client, out: Path, cfg: dict) -> None:
                 log.info("  %s cat %s: %s sp > cap, chia %d danh mục con", "  " * depth, cat, total, len(children))
                 for ch in children:
                     if ch["id"] not in cfg["exclude"]:
-                        walk(ch["id"], depth + 1)
+                        walk(node / node_name(ch["id"], ch.get("url_key")), ch["id"], depth + 1)
                 return
             log.warning("  cat %s: %s sp nhưng không có danh mục con, chỉ lấy được %d", cat, total,
                         PAGE_SIZE * PAGE_CAP)
         last = min(first["paging"].get("last_page", 1), PAGE_CAP)
         for p in range(2, last + 1):
             if (cat, p) not in done:
-                page(cat, p)
+                page(node, cat, p)
         log.info("  %s cat %s: %s sp, %d trang", "  " * depth, cat, total, last)
 
-    for root in cfg["roots"]:
-        walk(root, 0)
+    for root, slug in cfg["roots"].items():
+        walk(Path(node_name(root, slug)), root, 0)
 
 
 def listing_products(out: Path) -> dict[int, dict]:
+    # Trang 1 của danh mục cha trùng sản phẩm với danh mục con: gán sản phẩm vào danh mục sâu nhất.
     prods = {}
-    for x in read_lines(out / "listing.jsonl.gz"):
-        for it in x["payload"].get("data") or []:
-            prods[it["id"]] = it
+    for fp in kind_files(out, "listing"):
+        rel = fp.relative_to(out / "listing")
+        for x in read_lines(fp):
+            for it in x["payload"].get("data") or []:
+                old = prods.get(it["id"])
+                if old is None or len(rel.parts) >= len(old["_file"].parts):
+                    prods[it["id"]] = {**it, "_file": rel}
     return prods
 
 
@@ -223,7 +275,7 @@ def stage_detail(c: Client, out: Path, cfg: dict, st: State, today: date, limit:
         req = {"id": p["id"], "spid": p.get("seller_product_id")}
         res = c.get(f"{API}/products/{p['id']}", {"platform": "web", "spid": req["spid"]})
         if res is not None:
-            append(out / "detail.jsonl.gz", req, res)
+            append(out / "detail" / p["_file"], req, res)
             st["detail"][str(p["id"])] = today.isoformat()
             st.touch()
         _progress("detail", i, len(todo), t0)
@@ -232,10 +284,11 @@ def stage_detail(c: Client, out: Path, cfg: dict, st: State, today: date, limit:
 def detail_products(out: Path) -> dict[int, dict]:
     """Return the latest detail payload for each product in this snapshot."""
     products = {}
-    for row in read_lines(out / "detail.jsonl.gz"):
-        product_id = row.get("_req", {}).get("id")
-        if product_id is not None:
-            products[int(product_id)] = row.get("payload") or {}
+    for fp in kind_files(out, "detail"):
+        for row in read_lines(fp):
+            product_id = row.get("_req", {}).get("id")
+            if product_id is not None:
+                products[int(product_id)] = row.get("payload") or {}
     return products
 
 
@@ -348,7 +401,7 @@ def stage_reviews(c: Client, out: Path, cfg: dict, st: State, today: date, limit
                 ok = False
                 break
             res["data"] = [scrub_review(r) for r in res.get("data") or []]
-            append(out / "reviews.jsonl.gz", req, res)
+            append(out / "reviews" / p["_file"], req, res)
             if pg >= (res.get("paging") or {}).get("last_page", 0):
                 break
         if ok:
@@ -360,9 +413,15 @@ def stage_reviews(c: Client, out: Path, cfg: dict, st: State, today: date, limit
 def run(stages: list[str] | None = None, limit: int | None = None, roots: list[int] | None = None) -> None:
     cfg = dict(load_config()["crawl"]["tiki"])
     if roots:
-        cfg["roots"] = roots
+        cfg["roots"] = {r: cfg["roots"].get(r) for r in roots}
     root = paths().raw / "tiki"
-    today = datetime.now(timezone.utc).date()
+    root.mkdir(parents=True, exist_ok=True)
+    lock = _lock(root / ".lock")
+    if lock is None:
+        log.warning("[tiki] đang có tiến trình crawl khác chạy, bỏ qua lần này")
+        return
+    # Ngày theo giờ máy: lịch chạy 02:00 giờ VN vẫn là ngày hôm trước theo UTC.
+    today = date.today()
     out = root / today.isoformat()
     out.mkdir(parents=True, exist_ok=True)
     st = State(root / "_state.json")
@@ -380,26 +439,27 @@ def run(stages: list[str] | None = None, limit: int | None = None, roots: list[i
                 globals()[f"stage_{s}"](c, out, cfg, st, today, limit)
     finally:
         st.save()
+        lock.close()
         log.info("[tiki] %d request trong %.1f phút, bị chặn %d lần", c.n, (time.monotonic() - t0) / 60, c.blocks)
 
 
 def forever(stages: list[str] | None = None, roots: list[int] | None = None) -> None:
-    # Mỗi ngày (UTC) một snapshot listing; bị chặn thì nghỉ rồi chạy lại, tiếp tục từ chỗ dở.
+    # Mỗi ngày (giờ máy, như run()) một snapshot listing; bị chặn thì nghỉ rồi chạy lại, tiếp tục từ chỗ dở.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # để finally của run() kịp lưu _state.json
     cooldown = load_config()["crawl"]["tiki"]["blocked_cooldown"]
     while True:
-        day = datetime.now(timezone.utc).date()
+        day = date.today()
         try:
             run(stages, None, roots)
         except Blocked as e:
             log.warning("[tiki] %s; thử lại sau %d phút", e, cooldown / 60)
             time.sleep(cooldown)
             continue
-        # Lượt chạy kéo qua nửa đêm UTC thì vào ngay snapshot ngày mới, không bỏ mất ngày nào.
-        nxt = datetime.combine(day + timedelta(days=1), datetime.min.time(), timezone.utc)
-        wait = (nxt - datetime.now(timezone.utc)).total_seconds()
+        # Lượt chạy kéo qua nửa đêm thì vào ngay snapshot ngày mới, không bỏ mất ngày nào.
+        nxt = datetime.combine(day + timedelta(days=1), datetime.min.time())
+        wait = (nxt - datetime.now()).total_seconds()
         if wait > 0:
-            log.info("[tiki] xong snapshot %s, chờ tới %s UTC", day, nxt.strftime("%Y-%m-%d %H:%M"))
+            log.info("[tiki] xong snapshot %s, chờ tới %s", day, nxt.strftime("%Y-%m-%d %H:%M"))
             time.sleep(wait + 60)
 
 
