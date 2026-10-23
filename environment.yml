@@ -8,5 +8,8 @@ dependencies:
   - boto3
   - pydantic-settings
   - pandas          # airflow/scripts/ingest/kaggle_images.py
+  - duckdb          # src/: silver, gold
+  - pyarrow         # src/: bronze, normalize
+  - pillow          # src/media.py: đọc kích thước ảnh
   - pip:
       - kaggle

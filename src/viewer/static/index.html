@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lakehouse Viewer</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#16181d;--mute:#6b7280;--line:#e3e6eb;--acc:#2f5bea;--good:#16794c;--bad:#b42318;--chip:#eef1f6}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--ink:#e8eaf0;--mute:#9aa3b2;--line:#272c37;--acc:#7b9bff;--good:#47c28a;--bad:#ff8a80;--chip:#222733}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);display:flex;gap:20px;align-items:center;padding:10px 16px;flex-wrap:wrap}
+header h1{font-size:16px;margin:0}
+nav button{background:none;border:0;color:var(--mute);font:inherit;padding:6px 10px;border-radius:6px;cursor:pointer}
+nav button.on{color:var(--acc);background:var(--chip);font-weight:600}
+#ver{margin-left:auto;color:var(--mute);font-size:12px}
+main{padding:16px;max-width:1500px;margin:0 auto}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+.src h3{margin:0 0 2px;font-size:15px}.src small{color:var(--mute)}
+.kv{display:grid;grid-template-columns:1fr auto;gap:2px 10px;margin-top:8px}.kv span:nth-child(odd){color:var(--mute)}
+table{border-collapse:collapse;width:100%;background:var(--card)}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+th{position:sticky;top:0;background:var(--chip);font-weight:600}
+.scroll{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:8px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+input,select,textarea,button.btn{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+button.btn{cursor:pointer}button.btn:hover{border-color:var(--acc)}
+input[type=search]{min-width:220px}input.num{width:110px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+.item{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;display:flex;flex-direction:column}
+.item:hover{border-color:var(--acc)}
+.thumb{aspect-ratio:3/4;background:var(--chip);display:flex;align-items:center;justify-content:center;color:var(--mute);font-size:12px;position:relative}
+.thumb img{width:100%;height:100%;object-fit:cover}
+.badge{position:absolute;top:6px;left:6px;background:var(--acc);color:#fff;font-size:11px;padding:1px 6px;border-radius:999px}
+.badge.out{background:var(--bad);left:auto;right:6px}
+.item .b{padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+.name{font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.9em}
+.mute{color:var(--mute);font-size:12px}.price{font-weight:700}.old{color:var(--mute);text-decoration:line-through;font-size:12px;margin-left:4px}
+.chip{display:inline-block;background:var(--chip);border-radius:999px;padding:1px 8px;font-size:11px;color:var(--mute);margin-right:4px}
+.pager{display:flex;gap:10px;align-items:center;margin:14px 0}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;z-index:20;overflow:auto;padding:24px 12px}
+#modal .box{background:var(--bg);max-width:1100px;margin:0 auto;border-radius:12px;padding:18px;position:relative}
+#modal .x{position:absolute;top:8px;right:12px;font-size:22px;cursor:pointer;background:none;border:0;color:var(--ink)}
+.cols{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:18px}@media(max-width:800px){.cols{grid-template-columns:1fr}}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px}.gallery img{width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:6px;background:var(--chip)}
+.hero{width:100%;max-height:520px;object-fit:contain;background:var(--chip);border-radius:8px;margin-bottom:8px}
+h2{font-size:15px;margin:16px 0 6px}pre{background:var(--chip);padding:8px;border-radius:6px;overflow:auto;max-height:240px;white-space:pre-wrap}
+textarea{width:100%;height:130px;font-family:ui-monospace,Menlo,monospace}
+.err{color:var(--bad)}.ok{color:var(--good)}
+.rv{border-bottom:1px solid var(--line);padding:6px 0}
+svg.spark{width:100%;height:80px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Lakehouse Viewer</h1>
+  <nav id="nav"></nav>
+  <span id="ver"></span>
+</header>
+<main id="main"></main>
+<div id="modal"><div class="box"><button class="x" onclick="closeModal()">×</button><div id="mbody"></div></div></div>
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = n => n == null ? "—" : Number(n).toLocaleString("vi-VN");
+const money = (v, cur) => v == null ? "—" : fmt(Math.round(v * 100) / 100) + " " + (cur || "");
+const api = async (path, opt) => { const r = await fetch(path, opt); return r.json(); };
+const qs = o => new URLSearchParams(Object.fromEntries(Object.entries(o).filter(([, v]) => v !== "" && v != null))).toString();
+const imgSrc = p => p.img_local ? "/img?" + qs({p: p.img_local}) : (p.image_url || "");
+const TABS = {overview: "Tổng quan", schema: "Schema", products: "Sản phẩm", tables: "Bảng dữ liệu", sql: "SQL"};
+let state = {tab: "overview", filters: {sort: "newest", size: 40}, page: 1, table: null, tpage: 1};
+
+function nav() {
+  $("#nav").innerHTML = Object.entries(TABS).map(([k, v]) => `<button class="${state.tab === k ? "on" : ""}" onclick="go('${k}')">${v}</button>`).join("");
+}
+function go(t) { state.tab = t; nav(); ({overview, schema, products, tables, sql}[t])(); }
+
+async function overview() {
+  const d = await api("/api/overview");
+  $("#ver").textContent = "Gold cập nhật: " + d.version;
+  $("#main").innerHTML = `<div class="cards">${d.sources.map(s => `
+    <div class="card src"><h3>${esc(s.source_name)}</h3><small>${esc(s.source_type)} · ${esc(s.country)} · ${esc(s.data_types)}</small>
+    <div class="kv"><span>Sản phẩm</span><b>${fmt(s.products)}</b><span>Giá trung vị</span><b>${fmt(s.median_price_vnd)} ₫</b>
+    <span>Giảm giá TB</span><b>${s.avg_discount == null ? "—" : s.avg_discount + "%"}</b><span>Còn hàng</span><b>${s.in_stock_pct == null ? "—" : s.in_stock_pct + "%"}</b>
+    <span>Ảnh đã tải / mục tiêu</span><b>${fmt(s.media_ok)} / ${fmt(s.media_total)}</b><span>Review</span><b>${fmt(s.reviews)}</b>
+    <span>Ngày snapshot</span><b>${esc(s.last_date || "—")}</b>
+    ${s.orders ? `<span>Đơn hàng</span><b>${fmt(s.orders)}</b>` : ""}${s.customers ? `<span>Khách hàng</span><b>${fmt(s.customers)}</b>` : ""}</div>
+    <button class="btn" style="margin-top:10px" onclick="openSource('${esc(s.source)}')">Xem sản phẩm →</button></div>`).join("")}</div>
+    <h2>Các bảng gold</h2><div class="scroll"><table><tr><th>Bảng</th><th>Số dòng</th><th></th></tr>
+    ${d.tables.map(t => `<tr><td>${esc(t.name)}</td><td>${fmt(t.rows)}</td><td><a href="#" onclick="openTable('${esc(t.name)}');return false">xem</a></td></tr>`).join("")}</table></div>`;
+}
+function openSource(s) { state.filters = {sort: "newest", size: 40, source: s, hasimg: "1"}; state.page = 1; go("products"); }
+function openTable(t) { state.table = t; state.tpage = 1; go("tables"); }
+
+async function products() {
+  const f = state.filters;
+  const opts = (k, list) => list.map(([v, l]) => `<option value="${v}" ${f[k] === v ? "selected" : ""}>${l}</option>`).join("");
+  $("#main").innerHTML = `<div class="bar">
+    <input type="search" id="f-q" placeholder="Tìm tên / brand…" value="${esc(f.q || "")}">
+    <select id="f-source">${opts("source", [["", "Mọi nguồn"], ["tiki", "Tiki"], ["brands", "Web hãng"], ["zara", "Zara"], ["uniqlo", "Uniqlo"], ["hm", "H&M"], ["shopee", "Shopee"], ["olist", "Olist"]])}</select>
+    <select id="f-audience">${opts("audience", [["", "Mọi đối tượng"], ["men", "Nam"], ["women", "Nữ"], ["kids", "Trẻ em"], ["unisex", "Unisex"], ["unknown", "Chưa rõ"]])}</select>
+    <input type="search" id="f-category" placeholder="Danh mục (vd: tops, t_shirts, áo thun)…" value="${esc(f.category || "")}">
+    <input class="num" type="number" id="f-min" placeholder="Giá từ (₫)" value="${esc(f.min || "")}"><input class="num" type="number" id="f-max" placeholder="đến (₫)" value="${esc(f.max || "")}">
+    <label><input type="checkbox" id="f-instock" ${f.instock === "1" ? "checked" : ""}> Còn hàng</label>
+    <label><input type="checkbox" id="f-hasimg" ${f.hasimg === "1" ? "checked" : ""}> Có ảnh</label>
+    <select id="f-sort">${opts("sort", [["newest", "Mới thấy"], ["price_asc", "Giá tăng"], ["price_desc", "Giá giảm"], ["discount", "Giảm giá nhiều"], ["rating", "Đánh giá cao"], ["sold", "Bán chạy"], ["name", "Tên A-Z"]])}</select>
+    <button class="btn" onclick="applyFilters()">Lọc</button></div><div id="list">Đang tải…</div>`;
+  for (const id of ["f-q", "f-category", "f-min", "f-max"]) $("#" + id).addEventListener("keydown", e => e.key === "Enter" && applyFilters());
+  loadList();
+}
+function applyFilters() {
+  state.filters = {q: $("#f-q").value, source: $("#f-source").value, audience: $("#f-audience").value, category: $("#f-category").value,
+    min: $("#f-min").value, max: $("#f-max").value, instock: $("#f-instock").checked ? "1" : "", hasimg: $("#f-hasimg").checked ? "1" : "",
+    sort: $("#f-sort").value, size: 40};
+  state.page = 1; loadList();
+}
+async function loadList() {
+  const d = await api("/api/products?" + qs({...state.filters, page: state.page}));
+  if (d.error) { $("#list").innerHTML = `<p class="err">${esc(d.error)}</p>`; return; }
+  const pages = Math.max(1, Math.ceil(d.total / d.size));
+  const pager = `<div class="pager"><button class="btn" ${d.page <= 1 ? "disabled" : ""} onclick="state.page--;loadList()">← Trước</button>
+    <span>Trang ${d.page}/${fmt(pages)} · ${fmt(d.total)} sản phẩm</span><button class="btn" ${d.page >= pages ? "disabled" : ""} onclick="state.page++;loadList()">Sau →</button></div>`;
+  $("#list").innerHTML = pager + `<div class="grid">${d.items.map(p => `
+    <div class="item" onclick="openProduct('${esc(p.product_key)}')">
+      <div class="thumb">${imgSrc(p) ? `<img loading="lazy" src="${esc(imgSrc(p))}" referrerpolicy="no-referrer" onerror="this.replaceWith('không tải được ảnh')">` : "không có ảnh"}
+      ${p.discount_pct ? `<span class="badge">-${Math.round(p.discount_pct)}%</span>` : ""}${p.in_stock === false ? `<span class="badge out">hết hàng</span>` : ""}</div>
+      <div class="b"><div class="name">${esc(p.name || "(không tên)")}</div><div class="mute">${esc(p.brand_name || "")} ${p.category_l2 ? "· " + esc(p.category_l1) + "/" + esc(p.category_l2) : ""}</div>
+      <div><span class="price">${money(p.price, p.price_currency)}</span>${p.original_price ? `<span class="old">${fmt(p.original_price)}</span>` : ""}</div>
+      <div class="mute">${p.price_currency && p.price_currency !== "VND" && p.price_vnd ? "≈ " + fmt(p.price_vnd) + " ₫ · " : ""}<span class="chip">${esc(p.source)}</span><span class="chip">${esc(p.audience)}</span>${p.rating_avg ? "★" + p.rating_avg.toFixed(1) : ""}</div></div></div>`).join("")}</div>` + pager;
+}
+
+function spark(h) {
+  const v = h.map(x => x.price_vnd).filter(x => x != null);
+  if (v.length < 2) return "";
+  const lo = Math.min(...v), hi = Math.max(...v), w = 300, ht = 70;
+  const pts = v.map((y, i) => `${(i / (v.length - 1)) * w},${hi === lo ? ht / 2 : ht - ((y - lo) / (hi - lo)) * (ht - 8) - 4}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${ht}" preserveAspectRatio="none"><polyline fill="none" stroke="var(--acc)" stroke-width="2" points="${pts}"/></svg>`;
+}
+const mediaSrc = m => m.local_path && m.download_status === "ok" ? "/img?" + qs({p: m.local_path}) : m.url;
+
+async function openProduct(key) {
+  $("#modal").style.display = "block"; $("#mbody").textContent = "Đang tải…";
+  const d = await api("/api/product?" + qs({key}));
+  const p = d.product; if (!p) { $("#mbody").textContent = "Không có dữ liệu"; return; }
+  let attrs = p.attributes; try { attrs = JSON.stringify(JSON.parse(attrs), null, 2); } catch (e) {}
+  const imgs = d.media.filter(m => m.media_type === "image"), vids = d.media.filter(m => m.media_type === "video");
+  $("#mbody").innerHTML = `<div class="cols"><div>
+      ${imgs[0] ? `<img class="hero" id="hero" src="${esc(mediaSrc(imgs[0]))}" referrerpolicy="no-referrer">` : ""}
+      <div class="gallery">${imgs.map(m => `<img loading="lazy" src="${esc(mediaSrc(m))}" referrerpolicy="no-referrer" onclick="$('#hero').src=this.src">`).join("")}</div>
+      ${vids.map(m => `<video controls style="width:100%;margin-top:8px" src="${esc(mediaSrc(m))}"></video>`).join("")}
+      <h2>Lịch sử giá (VND) ${d.history.length} snapshot</h2>${spark(d.history)}
+      <div class="scroll" style="max-height:160px"><table><tr><th>Ngày</th><th>Giá</th><th>Giá gốc</th><th>Còn hàng</th><th>Đã bán</th></tr>
+      ${d.history.map(h => `<tr><td>${esc(h.date_key)}</td><td>${fmt(h.price)}</td><td>${fmt(h.original_price)}</td><td>${h.in_stock == null ? "—" : h.in_stock ? "✓" : "✗"}</td><td>${fmt(h.sold_count)}</td></tr>`).join("")}</table></div>
+    </div><div>
+      <h2 style="margin-top:0">${esc(p.name || "(không tên)")}</h2>
+      <div class="mute">${esc(p.brand_name || "")} · ${esc(p.category_path || p.category_leaf || "")}</div>
+      <div style="font-size:20px;margin:6px 0"><span class="price">${money(p.price, p.price_currency)}</span>${p.original_price ? `<span class="old">${fmt(p.original_price)}</span>` : ""}
+      ${p.discount_pct ? `<span class="chip">-${Math.round(p.discount_pct)}%</span>` : ""}</div>
+      <div><span class="chip">${esc(p.source)}</span><span class="chip">${esc(p.audience)}</span>${p.in_stock ? `<span class="ok">còn hàng</span>` : `<span class="err">hết hàng</span>`}
+      ${p.rating_avg ? ` · ★${p.rating_avg.toFixed(1)} (${fmt(p.rating_count)})` : ""}${p.sold_count ? ` · đã bán ${fmt(p.sold_count)}` : ""}</div>
+      ${p.url ? `<p><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">Mở trang gốc ↗</a></p>` : ""}
+      <h2>Mô tả</h2><div style="white-space:pre-wrap;max-height:180px;overflow:auto">${esc(p.description || "—")}</div>
+      <h2>Biến thể (${d.variants.length})</h2><div class="scroll" style="max-height:180px"><table><tr><th>Màu</th><th>Size</th><th>Giá</th><th>Tồn</th><th>Còn</th></tr>
+      ${d.variants.map(v => `<tr><td>${esc(v.color || "")}</td><td>${esc(v.size || "")}</td><td>${fmt(v.price)}</td><td>${fmt(v.stock_qty)}</td><td>${v.in_stock == null ? "—" : v.in_stock ? "✓" : "✗"}</td></tr>`).join("")}</table></div>
+      <h2>Thuộc tính riêng của nguồn</h2><pre>${esc(attrs || "—")}</pre>
+      ${d.seller.length ? `<h2>Người bán</h2><pre>${esc(JSON.stringify(d.seller[0], null, 1))}</pre>` : ""}
+      <h2>Review (${d.reviews.length} mới nhất)</h2>${d.reviews.map(r => `<div class="rv"><b>${"★".repeat(Math.round(r.rating || 0))}</b> ${esc(r.title || "")}
+        <span class="mute">${esc(r.date_key || "")} ${r.size_purchased ? "· size " + esc(r.size_purchased) : ""} ${r.color_purchased ? "· " + esc(r.color_purchased) : ""}</span><div>${esc(r.content || "")}</div></div>`).join("") || "<span class='mute'>Chưa có review</span>"}
+    </div></div><p class="mute">product_key: ${esc(p.product_key)}</p>`;
+}
+function closeModal() { $("#modal").style.display = "none"; $("#mbody").innerHTML = ""; }
+$("#modal").addEventListener("click", e => e.target.id === "modal" && closeModal());
+document.addEventListener("keydown", e => e.key === "Escape" && closeModal());
+
+function grid(d) {
+  return `<div class="scroll"><table><tr>${d.columns.map(c => `<th>${esc(c)}</th>`).join("")}</tr>
+    ${d.rows.map(r => `<tr>${r.map(v => `<td title="${esc(v)}">${v == null ? "<span class='mute'>NULL</span>" : esc(typeof v === "object" ? JSON.stringify(v) : v)}</td>`).join("")}</tr>`).join("")}</table></div>`;
+}
+async function tables() {
+  const ov = await api("/api/overview");
+  state.table = state.table || ov.tables[0].name;
+  $("#main").innerHTML = `<div class="bar"><select id="tsel">${ov.tables.map(t => `<option ${t.name === state.table ? "selected" : ""} value="${esc(t.name)}">${esc(t.name)} (${fmt(t.rows)})</option>`).join("")}</select></div><div id="tbl">Đang tải…</div>`;
+  $("#tsel").onchange = e => { state.table = e.target.value; state.tpage = 1; showTable(); };
+  showTable();
+}
+async function showTable() {
+  const d = await api("/api/table?" + qs({name: state.table, page: state.tpage}));
+  if (d.error) { $("#tbl").innerHTML = `<p class="err">${esc(d.error)}</p>`; return; }
+  const pages = Math.max(1, Math.ceil(d.total / 100));
+  $("#tbl").innerHTML = `<div class="pager"><button class="btn" ${d.page <= 1 ? "disabled" : ""} onclick="state.tpage--;showTable()">← Trước</button>
+    <span>Trang ${d.page}/${fmt(pages)} · ${fmt(d.total)} dòng</span><button class="btn" ${d.page >= pages ? "disabled" : ""} onclick="state.tpage++;showTable()">Sau →</button></div>` + grid(d);
+}
+async function schema() {
+  const d = await api("/api/schema");
+  state.entity = state.entity || "product";
+  $("#main").innerHTML = `<p class="mute">Schema chung: mọi nguồn đều được chuẩn hoá về các entity dưới đây (dữ liệu silver). Chọn một entity để xem cột, kiểu và % dòng có dữ liệu theo từng nguồn.</p>
+    <div class="bar">${d.entities.map(e => `<button class="btn ${state.entity === e.name ? "on" : ""}" onclick="state.entity='${e.name}';schema()" style="${state.entity === e.name ? "border-color:var(--acc);color:var(--acc)" : ""}">${esc(e.name)} <span class="mute">${fmt(e.rows)}</span></button>`).join("")}</div><div id="sch">Đang tải…</div>`;
+  const s = await api("/api/schema?" + qs({entity: state.entity}));
+  if (s.error) { $("#sch").innerHTML = `<p class="err">${esc(s.error)}</p>`; return; }
+  const srcs = s.sources.map(x => x.source);
+  const heat = v => v == null ? "" : `background:color-mix(in srgb, var(--good) ${Math.round(v * 0.55)}%, transparent)`;
+  $("#sch").innerHTML = `<div class="scroll" style="max-height:62vh"><table><tr><th>Cột</th><th>Kiểu</th><th>Ví dụ</th>${s.sources.map(x => `<th title="${fmt(x.rows)} dòng">${esc(x.source)}<div class="mute">${fmt(x.rows)}</div></th>`).join("")}</tr>
+    ${s.columns.map(c => `<tr><td><b>${esc(c.name)}</b>${c.core ? "" : ' <span class="chip">thêm ở silver</span>'}</td><td class="mute">${esc(c.type)}</td>
+      <td title="${esc(typeof c.example === "object" ? JSON.stringify(c.example) : c.example)}">${c.example == null ? "<span class='mute'>—</span>" : esc(typeof c.example === "object" ? JSON.stringify(c.example) : String(c.example).slice(0, 60))}</td>
+      ${srcs.map(x => `<td style="${heat(c.fill[x])}">${c.fill[x] == null ? "" : c.fill[x] + "%"}</td>`).join("")}</tr>`).join("")}</table></div>
+    <p class="mute">Ô xanh đậm = nguồn đó có dữ liệu cho cột; trống/0% = nguồn không có loại thông tin này.</p>
+    <h2>Dòng mẫu đã chuẩn hoá</h2><div class="bar"><select id="smp">${srcs.map(x => `<option>${esc(x)}</option>`).join("")}</select><button class="btn" onclick="loadSample()">Xem 20 dòng</button></div><div id="smpout"></div>`;
+  loadSample();
+}
+async function loadSample() {
+  const d = await api("/api/sample?" + qs({entity: state.entity, source: $("#smp").value, n: 20}));
+  $("#smpout").innerHTML = d.error ? `<p class="err">${esc(d.error)}</p>` : grid(d);
+}
+const EXAMPLES = {
+  "Giá trung vị theo nguồn": "SELECT source, count(*) sp, round(median(price_vnd)) gia_vnd FROM fact_price_snapshot GROUP BY 1 ORDER BY 2 DESC",
+  "Top brand": "SELECT brand_name, sources, n_products, avg_price_vnd, avg_discount_pct FROM agg_brand_summary ORDER BY n_products DESC LIMIT 30",
+  "Giảm giá sâu nhất": "SELECT name, brand_name, source, price_vnd, discount_pct FROM pl WHERE discount_pct IS NOT NULL ORDER BY discount_pct DESC LIMIT 50",
+  "Giá đổi theo ngày": "SELECT product_key, date_key, price_vnd, price_vnd_change FROM fact_price_snapshot WHERE price_vnd_change IS NOT NULL AND price_vnd_change <> 0 LIMIT 100",
+};
+function sql() {
+  $("#main").innerHTML = `<div class="bar">${Object.keys(EXAMPLES).map(k => `<button class="btn" onclick="$('#q').value=EXAMPLES['${k}']">${k}</button>`).join("")}</div>
+    <textarea id="q" spellcheck="false">${esc(EXAMPLES["Top brand"])}</textarea>
+    <div class="bar" style="margin-top:8px"><button class="btn" onclick="runSql()">Chạy (Ctrl+Enter)</button><span id="sqlinfo" class="mute">Chỉ đọc · tối đa 1000 dòng · bảng: gold + <code>pl</code> (một dòng/sản phẩm, giá mới nhất)</span></div><div id="sqlout"></div>`;
+  $("#q").addEventListener("keydown", e => e.ctrlKey && e.key === "Enter" && runSql());
+}
+async function runSql() {
+  const d = await api("/api/sql", {method: "POST", body: JSON.stringify({sql: $("#q").value})});
+  if (d.error) { $("#sqlout").innerHTML = `<p class="err">${esc(d.error)}</p>`; return; }
+  $("#sqlinfo").textContent = `${fmt(d.rows.length)} dòng${d.capped ? " (đã cắt ở 1000)" : ""} · ${d.seconds}s`;
+  $("#sqlout").innerHTML = grid(d);
+}
+nav(); overview();
+</script>
+</body>
+</html>

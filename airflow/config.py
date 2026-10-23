@@ -56,7 +56,7 @@ class Config(BaseSettings):
 
     # web riêng của các hãng: Haravan/Sapo/Shopify cùng mở /collections/all/products.json, không có WAF.
     # Haravan có inventory_quantity theo biến thể và sole_quantity (số đã bán); Sapo chỉ có tồn kho; Shopify
-    # chỉ có available.
+    # chỉ có available. "currency" mặc định VND; site nước ngoài khai báo USD.
     crawl_brands_user_agent: str = crawl_tiki_user_agent
     crawl_brands_min_interval: float = 1.0  # giây giữa 2 request tới CÙNG một site
     crawl_brands_workers: int = 6  # số site crawl song song
@@ -88,10 +88,18 @@ class Config(BaseSettings):
         "davies": {"domain": "davies.vn", "platform": "sapo"},
         "clownz": {"domain": "clownz.vn", "platform": "sapo"},
         "yame": {"domain": "yame.vn", "platform": "shopify"},
-        "stussy": {"domain": "www.stussy.com", "platform": "shopify"},
-        "gymshark": {"domain": "gymshark.com", "platform": "shopify"},
-        "everlane": {"domain": "www.everlane.com", "platform": "shopify"},
-        "allbirds": {"domain": "www.allbirds.com", "platform": "shopify"},
+        "stussy": {"domain": "www.stussy.com", "platform": "shopify", "currency": "USD"},
+        "gymshark": {"domain": "gymshark.com", "platform": "shopify", "currency": "USD"},
+        "everlane": {"domain": "www.everlane.com", "platform": "shopify", "currency": "USD"},
+        "allbirds": {"domain": "www.allbirds.com", "platform": "shopify", "currency": "USD"},
+        "kith": {"domain": "kith.com", "platform": "shopify", "currency": "USD"},
+        "taylorstitch": {"domain": "taylorstitch.com", "platform": "shopify", "currency": "USD"},
+        "outerknown": {"domain": "outerknown.com", "platform": "shopify", "currency": "USD"},
+        "cotopaxi": {"domain": "www.cotopaxi.com", "platform": "shopify", "currency": "USD"},
+        "pangaia": {"domain": "pangaia.com", "platform": "shopify", "currency": "USD"},
+        "aimeleondore": {"domain": "aimeleondore.com", "platform": "shopify", "currency": "USD"},
+        "bonobos": {"domain": "www.bonobos.com", "platform": "shopify", "currency": "USD"},
+        "tentree": {"domain": "tentree.com", "platform": "shopify", "currency": "USD"},
     }
 
     # API nội bộ của web Zara (không phải API công khai). robots.txt cấm /*/status/*?ajax=true (tồn kho) nên
@@ -133,6 +141,25 @@ class Config(BaseSettings):
         default="lakeadmin123",
         validation_alias=AliasChoices("AIRFLOW_LAKE_SECRET_KEY", "LAKE_SECRET_KEY"),
     )
+
+    # pipeline multi-agent (src/): crawl → bronze → normalize → media → silver → gold
+    lakehouse_dir: Path = PROJECT_ROOT / "data" / "lakehouse"  # bronze/normalized/silver/gold/media (parquet cục bộ)
+    agents_dir: Path = PROJECT_ROOT / "data" / "_agents"  # log sự kiện, khoá, trạng thái từng lần chạy
+    agents_workers: int = 8
+    agents_task_retries: int = 1
+    agents_crawl_timeout_hours: dict[str, float] = {"brands": 6, "zara": 4, "uniqlo": 10, "tiki": 20}
+    # Ảnh/video: tải theo URL từ bảng media chuẩn hoá. Đĩa đang đầy nên có trần cho mỗi lần chạy.
+    media_max_per_product: int = 4
+    media_workers: int = 8
+    media_host_concurrency: int = 4
+    media_max_files_per_run: int = 50_000  # trần mỗi nguồn mỗi lần chạy
+    media_max_bytes_per_run: int = 4 * 1024**3
+    media_min_free_gb: int = 30  # dưới ngưỡng này thì dừng tải
+    media_video: bool = True
+    media_video_max_mb: int = 30
+    media_zara_width: int = 1024  # URL ảnh Zara có tham số {width}
+    # Tỷ giá cố định để so sánh giá giữa các nguồn trong gold (price_vnd); cập nhật khi cần.
+    fx_to_vnd: dict[str, float] = {"VND": 1.0, "USD": 25_400.0, "BRL": 4_800.0}
 
     default_timezone: str = "Asia/Ho_Chi_Minh"
     default_retries: int = 2
