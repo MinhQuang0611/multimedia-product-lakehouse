@@ -109,6 +109,98 @@ python airflow/scripts/ingest/kaggle_images.py          # 256px → data/raw/{hm
 python airflow/scripts/ingest/kaggle_images.py --full   # ảnh gốc → images_full/
 ```
 
+## Pipeline multi-agent (crawl → bronze → chuẩn hoá → silver → gold)
+
+```bash
+python run.py pipeline                                   # toàn bộ, mọi nguồn
+python run.py pipeline --stages bronze normalize silver gold report
+python run.py pipeline --stages crawl --sources zara --limit 3
+python run.py pipeline --plan                            # chỉ in đồ thị task
+```
+
+`src/orchestrator/supervisor.py` dựng đồ thị task rồi giao cho các agent chạy song song theo phụ thuộc; mọi sự kiện ghi vào
+`data/_agents/runs/<run>/events.jsonl` (bus), kết quả từng task ở `summary.json`, báo cáo ở `data/reports/pipeline/latest.md`.
+
+```
+src/
+├── common/        core.py (đường dẫn, Task/Bus/Agent/khoá), schema.py (schema chuẩn 5 entity)
+├── orchestrator/  supervisor.py (đồ thị task, chạy song song), cli.py (python run.py pipeline)
+├── crawl/         agent.py: chạy crawler từng nguồn trong tiến trình con
+├── bronze/        agent.py: raw jsonl.gz/CSV → parquet
+├── normalize/     agent.py + adapters/ (tiki, brands, zara, uniqlo, legacy cho H&M/Shopee/Olist)
+├── media/         agent.py: tải ảnh/video, kho theo nội dung
+├── silver/        agent.py: làm sạch, quarantine
+├── gold/          agent.py: dim/fact/agg + gold.duckdb
+├── report/        agent.py: báo cáo chạy
+└── viewer/        server.py + static/index.html: web xem dữ liệu gold
+```
+
+| Agent | Việc | Ghi chú |
+|---|---|---|
+| `crawl` | chạy crawler từng nguồn (tiến trình con, có timeout) | lỗi/WAF không chặn các task sau (dùng dữ liệu đã có); lần sau tiếp tục từ chỗ dở |
+| `bronze` | raw `jsonl.gz`/CSV → parquet y nguyên + cột lineage | `data/lakehouse/bronze/<nguồn>/<dataset>/snapshot_date=…`; bỏ qua ngày không đổi |
+| `normalize` | bronze → **schema chuẩn chung**, mỗi nguồn một adapter (`src/normalize/adapters/`) | 11 entity, xem bên dưới (`src/common/schema.py`) |
+| `media` | tải ảnh/video theo URL, đăng ký ảnh cục bộ H&M/Shopee | kho theo nội dung `media/files/<nguồn>/<sha[:2]>/<sha256>.<ext>` + manifest; trần file/dung lượng/đĩa trống trong `airflow/config.py` |
+| `silver` | làm sạch, khử trùng lặp, kiểm tra chất lượng, gắn đường dẫn media | dòng lỗi vào `silver/_quarantine/`; cảnh báo mềm ở cột `dq_flags`; log ở `data/reports/quality_log.csv` |
+| `gold` | lược đồ sao + bảng tổng hợp, giá quy đổi VND (`fx_to_vnd`) | `data/lakehouse/gold/<bảng>/data.parquet`; mở `gold/gold.duckdb` để truy vấn |
+| `report` | tổng hợp trạng thái task + độ phủ từng nguồn | luôn chạy, kể cả khi task trước lỗi |
+
+Nguồn: `tiki`, `brands` (38 web hãng), `zara`, `uniqlo` (crawl) và `hm`, `shopee`, `olist` (CSV Kaggle). **Mọi bảng của mọi nguồn**
+đều vào một schema chung gồm 11 entity (`src/common/schema.py`; đổi cột thì tăng `SCHEMA_VERSION` để dựng lại):
+
+| Entity | Nội dung | Nguồn có dữ liệu |
+|---|---|---|
+| `product` | sản phẩm × ngày snapshot (giá, tồn kho, rating, danh mục chuẩn, brand sạch, đối tượng) | cả 7 nguồn |
+| `variant` | màu/size/SKU, giá và tồn kho theo biến thể | tiki, brands, zara, uniqlo, hm |
+| `media` | ảnh/video (URL hoặc file cục bộ, kết quả tải) | tiki, brands, zara, uniqlo, hm, shopee |
+| `review` | đánh giá theo sản phẩm (Tiki, Uniqlo) hoặc theo đơn (Olist) | tiki, uniqlo, olist |
+| `seller` | cửa hàng/người bán | tiki, brands, zara, uniqlo, olist |
+| `category` | cây danh mục gốc của từng nguồn | tiki, brands, zara, uniqlo, hm, olist |
+| `customer` | khách hàng (tuổi, vùng, trạng thái thành viên) | hm, olist |
+| `order`, `order_item`, `payment` | đơn hàng, dòng hàng, thanh toán | hm (đơn = khách × ngày × kênh), olist |
+| `location` | toạ độ theo mã bưu chính | olist |
+
+Cột chuẩn hoá chung trong `product` (bộ luật ở `src/normalize/standardize.py`, áp ở bước normalize):
+`category_l1`/`category_l2` (danh mục chuẩn 2 cấp: tops, bottoms, outerwear, footwear, dresses_skirts, accessories, bags,
+underwear_swim, sleepwear, activewear, sets, non_fashion, other…), `brand_std` (bỏ khẩu hiệu, tên miền, "Official"),
+`audience` (men/women/kids/unisex/unknown). Silver thêm `audience_std`: nguồn không ghi đối tượng thì lấy đối tượng chiếm
+≥70% của cùng cửa hàng (cần ≥30 sản phẩm đã biết), dòng được suy ra có `audience_inferred = true`. Danh mục chuẩn là luật
+từ khoá (vi/en/pt/id) nên Shopee (tiêu đề Indonesia, nhiều hàng không phải thời trang) phần lớn còn `other`.
+
+Giới hạn dữ liệu nguồn: giá H&M trong giao dịch là số đã ẩn danh (không có đơn vị tiền nên không quy đổi VND); tồn kho
+Uniqlo bị API chặn trần ở 11; thời gian Olist ghi theo giờ địa phương Brazil nhưng được lưu như UTC.
+
+Gold: `dim_source`, `dim_date`, `dim_brand`, `dim_category` (theo nguồn), `dim_category_std` (danh mục chuẩn), `dim_category_tree`,
+`dim_product`, `dim_seller`, `dim_customer`, `dim_location`, `fact_price_snapshot`, `fact_variant_stock`, `fact_media`, `fact_review`,
+`fact_order`, `fact_order_item`, `fact_payment`, `agg_category_price`, `agg_brand_summary`, `agg_sales_month_category`.
+Tỷ giá quy đổi VND (`fx_to_vnd`: VND, USD, BRL) là hằng số trong `airflow/config.py`, chỉ để so sánh tương đối.
+
+### Xem dữ liệu gold trên web
+
+```bash
+python run.py viewer                      # http://127.0.0.1:8770 (--port, --host)
+setsid nohup python run.py viewer >data/_logs/viewer.log 2>&1 &     # chạy nền, sống sót khi ngắt SSH
+```
+
+Tổng quan theo nguồn, lọc/xem sản phẩm kèm ảnh, giá, tồn kho, lịch sử giá, review; duyệt từng bảng gold; ô SQL chỉ đọc
+(thêm bảng `pl`: một dòng mỗi sản phẩm với giá mới nhất). Trang tự nạp lại khi pipeline ghi gold mới. Mặc định chỉ nghe
+`127.0.0.1`; từ máy khác dùng `ssh -L 8770:localhost:8770 <máy>` (VS Code Remote tự chuyển cổng).
+
+### Chạy nền bằng cron (sống sót khi ngắt SSH)
+
+```bash
+scripts/install_cron.sh            # cài khối cron (chạy lại an toàn); --show để xem, --remove để gỡ
+```
+
+| Lịch | Lệnh |
+|---|---|
+| mỗi 4 giờ (`0 */4 * * *`) và khi máy khởi động lại | `--stages crawl` |
+| mỗi 3 giờ (`30 */3 * * *`) | `--stages media bronze normalize silver gold report` |
+
+Lịch chồng lên lần đang chạy thì tự bỏ qua (khoá `data/_agents/locks/`; crawl và xử lý khoá riêng nên chạy song song được).
+Log: `data/_logs/cron_pipeline_<ngày>.log` (giữ 14 ngày) và `data/_logs/agents_<run>_crawl_<nguồn>.log`. Chạy thủ công
+không cần giữ phiên SSH: `setsid nohup scripts/cron_pipeline.sh --stages crawl >/dev/null 2>&1 &`.
+
 ## Airflow
 
 `airflow/config.py` chứa cấu hình dùng chung cho orchestration và quy ước watermark. Các DAG sẽ được thêm sau vào `airflow/dags/`; script crawl, ingest, transform và watermark được tách trong `airflow/scripts/`.

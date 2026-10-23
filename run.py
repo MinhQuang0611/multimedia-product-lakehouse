@@ -13,6 +13,19 @@ AIRFLOW_ROOT = CRAWL_DIR.parents[1]
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "viewer":
+        ap = argparse.ArgumentParser(prog="run.py viewer", description="Web xem dữ liệu gold")
+        ap.add_argument("--host", default="127.0.0.1")
+        ap.add_argument("--port", type=int, default=8770)
+        a = ap.parse_args(sys.argv[2:])
+        from src.viewer.server import serve
+
+        serve(a.host, a.port)
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "pipeline":
+        from src.orchestrator.cli import main as pipeline
+
+        sys.exit(pipeline(sys.argv[2:]))
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
