@@ -1,4 +1,23 @@
 services:
+  warehouse:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${WH_DB:-warehouse}
+      POSTGRES_USER: ${WH_ADMIN_USER:-wh_owner}
+      POSTGRES_PASSWORD: ${WH_ADMIN_PASSWORD:?Set WH_ADMIN_PASSWORD in .env}
+      WH_APP_USER: wh_app
+      WH_APP_PASSWORD: ${WH_APP_PASSWORD:?Set WH_APP_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${WH_PORT:-5432}:5432"
+    volumes:
+      - warehouse-data:/var/lib/postgresql/data
+      - ./warehouse/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   minio:
     image: bitnamilegacy/minio:2025.4.22
     environment:
@@ -17,4 +36,5 @@ services:
       retries: 20
 
 volumes:
+  warehouse-data:
   minio-data:

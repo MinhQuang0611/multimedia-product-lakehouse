@@ -1,6 +1,22 @@
 # Tiki Image Lake
 
-Dự án gồm crawler sản phẩm Tiki, kho ảnh MinIO và khung orchestration Airflow. Không còn Data Warehouse, PostgreSQL, Superset, OLAP hay data mining.
+Dự án gồm crawler sản phẩm, kho ảnh MinIO, data warehouse PostgreSQL và khung orchestration Airflow.
+
+## Khởi động data warehouse và kho ảnh
+
+Chạy từ thư mục root repository (`F:/RIPT/BTL`), nơi đặt `docker-compose.yml` và `.env`. `lake/` chỉ chứa mã nguồn/dữ liệu pipeline; cấu hình Docker dùng chung và scripts init warehouse được quản lý tại root.
+
+PostgreSQL là data warehouse; mỗi dashboard/chủ đề có schema riêng. Scripts init ở `warehouse/init/` chạy tự động theo thứ tự tên khi Postgres khởi tạo volume lần đầu: tạo role `wh_app` chỉ đọc, các schema (`product_dashboard`, `sales_dashboard`, `customer_dashboard`, `marketing_dashboard`, `shared`) và bảng quản trị ban đầu. Hãy đổi mật khẩu mẫu trong `.env` trước khi chạy.
+
+```powershell
+Copy-Item .env.example .env
+# Sửa WH_ADMIN_PASSWORD và WH_APP_PASSWORD trong .env
+docker compose up -d warehouse
+```
+
+Kết nối từ máy host: `localhost:5432`, database `warehouse`. Dùng `wh_owner` cho quản trị; dashboard kết nối bằng `wh_app` (read-only). SQL init chỉ chạy tự động khi volume `warehouse-data` được tạo lần đầu. Thay đổi init sau đó cần migration riêng; muốn khởi tạo lại từ đầu thì phải xoá volume (sẽ mất dữ liệu).
+
+Các schema hiện là khung ban đầu; tạo bảng mart cụ thể theo chủ đề trong `warehouse/init/` sau khi thống nhất metric/dashboard. Đây là nguồn duy nhất cho init warehouse; không đặt scripts warehouse trong `lake/`.
 
 ## Khởi động kho ảnh
 

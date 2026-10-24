@@ -1,0 +1,15 @@
+data/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.ruff_cache/
+kaggle.json
+.env
+*.tmp
+
+# Airflow local runtime state. Durable watermarks will live in MinIO under lake/_control/.
+airflow/state/*
+!airflow/state/.gitkeep
+
+# Sách tham khảo: có bản quyền và nặng, không đưa lên repo.
+docs/*.pdf
