@@ -148,7 +148,7 @@ src/
 ├── silver/        agent.py: làm sạch, quarantine
 ├── gold/          agent.py: dim/fact/agg + gold.duckdb
 ├── report/        agent.py: báo cáo chạy
-└── viewer/        server.py + static/index.html: web xem dữ liệu gold
+└── viewer/        server.py + static/index.html: web xem bộ mẫu data/sample (lưới sản phẩm, tổng quan, SQL)
 ```
 
 | Agent | Việc | Ghi chú |
@@ -194,7 +194,8 @@ Tỷ giá quy đổi VND (`fx_to_vnd`: VND, USD, BRL) là hằng số trong `air
 ### Xem dữ liệu gold trên web
 
 ```bash
-python run.py viewer                      # http://127.0.0.1:8770 (--port, --host)
+python scripts/make_sample.py                # tạo bộ mẫu data/sample từ gold (100 sản phẩm/nguồn, ≤4 ảnh)
+python run.py viewer                      # http://127.0.0.1:8770 (--port, --host), đọc data/sample
 setsid nohup python run.py viewer >data/_logs/viewer.log 2>&1 &     # chạy nền, sống sót khi ngắt SSH
 ```
 

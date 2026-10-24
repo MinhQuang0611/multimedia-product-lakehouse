@@ -45,6 +45,27 @@ COMPILED = [(l1, l2, re.compile(p)) for l1, l2, p in RULES]
 OLIST_FASHION = re.compile(r"fashio|fashion|underwear|luggage|watches|calcados|bolsas|roupa")
 
 
+def match_rule(seg: str) -> tuple[str, str] | None:
+    t = fold(seg).replace("_", " ").replace("-", " ")
+    for l1, l2, rx in COMPILED:
+        if rx.search(t):
+            return l1, l2
+    return None
+
+
+def zara_category(path: str) -> tuple[str, str] | None:
+    # Zara: "Section > FAMILY > SUBFAMILY". FAMILY (TROUSERS, WIND-JACKET) quyết định nhóm lớn vì SUBFAMILY là mã nội bộ
+    # ("GRL KNITWEAR", "W.SHORT-OUTW") dễ khớp nhầm; SUBFAMILY chỉ dùng để chi tiết hoá nhóm con khi cùng nhóm lớn
+    # (TROUSERS > DENIM TRS → jeans, SPORT SHOES > TRAINER → sneakers).
+    parts = path.split(" > ")
+    if len(parts) < 3:
+        return None
+    family, sub = match_rule(parts[1]), match_rule(parts[2])
+    if family and sub and family[0] == sub[0]:
+        return sub
+    return family or sub
+
+
 def std_category(source: str, *texts) -> tuple[str, str]:
     """(category_l1, category_l2) từ các chuỗi theo thứ tự ưu tiên (đường dẫn danh mục trước, tên sản phẩm sau)."""
     if source == "olist":
@@ -54,12 +75,12 @@ def std_category(source: str, *texts) -> tuple[str, str]:
     for text in texts:
         if not text:
             continue
+        if source == "zara" and (r := zara_category(str(text))):
+            return r
         # Đi từ cấp sâu nhất của đường dẫn lên: "T-Shirts, Sweats & Fleece > T-Shirts" phải ra áo thun, không phải áo khoác.
         for seg in reversed(str(text).split(" > ")):
-            t = fold(seg).replace("_", " ").replace("-", " ")
-            for l1, l2, rx in COMPILED:
-                if rx.search(t):
-                    return l1, l2
+            if r := match_rule(seg):
+                return r
     return "other", "other"
 
 
