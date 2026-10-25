@@ -14,7 +14,7 @@ AIRFLOW_ROOT = CRAWL_DIR.parents[1]
 
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "viewer":
-        ap = argparse.ArgumentParser(prog="run.py viewer", description="Web xem dữ liệu gold")
+        ap = argparse.ArgumentParser(prog="run.py viewer", description="Web xem bộ mẫu data/sample")
         ap.add_argument("--host", default="127.0.0.1")
         ap.add_argument("--port", type=int, default=8770)
         a = ap.parse_args(sys.argv[2:])
