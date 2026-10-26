@@ -1,0 +1,74 @@
+# Node tìm kiếm ảnh phân tán theo nguồn. Mỗi profile là một kịch bản số node; cổng và cách chia nguồn phải khớp
+# lake/src/search/topology.py. Coordinator chạy trên host (cần GPU): python run.py search coordinator --topology n3
+#   docker compose -f docker-compose.search.yml --profile n3 up -d --build
+#   docker compose -f docker-compose.search.yml stop node-b      # kịch bản node lỗi
+name: lakehouse-search
+
+x-node: &node
+  image: lakehouse-search-node:latest
+  build:
+    context: ./lake/deploy/search
+    dockerfile: Dockerfile.node
+  volumes:
+    - ./lake:/app/lake:ro
+  restart: "no"
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+
+services:
+  node-all:
+    <<: *node
+    profiles: [n1]
+    environment: {NODE_ID: node-all, NODE_SOURCES: ""}
+    ports: ["127.0.0.1:18711:8000"]
+
+  node-a:
+    <<: *node
+    profiles: [n3]
+    environment: {NODE_ID: node-a, NODE_SOURCES: "tiki,brands"}
+    ports: ["127.0.0.1:18721:8000"]
+  node-b:
+    <<: *node
+    profiles: [n3]
+    # NODE_B_DELAY_MS=3000 docker compose ... up -d node-b: giả lập node chậm hơn timeout của coordinator
+    environment: {NODE_ID: node-b, NODE_SOURCES: "zara,uniqlo", NODE_DELAY_MS: "${NODE_B_DELAY_MS:-0}"}
+    ports: ["127.0.0.1:18722:8000"]
+  node-c:
+    <<: *node
+    profiles: [n3]
+    environment: {NODE_ID: node-c, NODE_SOURCES: "hm,shopee"}
+    ports: ["127.0.0.1:18723:8000"]
+
+  node-tiki:
+    <<: *node
+    profiles: [n6]
+    environment: {NODE_ID: node-tiki, NODE_SOURCES: tiki}
+    ports: ["127.0.0.1:18731:8000"]
+  node-brands:
+    <<: *node
+    profiles: [n6]
+    environment: {NODE_ID: node-brands, NODE_SOURCES: brands}
+    ports: ["127.0.0.1:18732:8000"]
+  node-zara:
+    <<: *node
+    profiles: [n6]
+    environment: {NODE_ID: node-zara, NODE_SOURCES: zara}
+    ports: ["127.0.0.1:18733:8000"]
+  node-uniqlo:
+    <<: *node
+    profiles: [n6]
+    environment: {NODE_ID: node-uniqlo, NODE_SOURCES: uniqlo}
+    ports: ["127.0.0.1:18734:8000"]
+  node-hm:
+    <<: *node
+    profiles: [n6]
+    environment: {NODE_ID: node-hm, NODE_SOURCES: hm}
+    ports: ["127.0.0.1:18735:8000"]
+  node-shopee:
+    <<: *node
+    profiles: [n6]
+    environment: {NODE_ID: node-shopee, NODE_SOURCES: shopee}
+    ports: ["127.0.0.1:18736:8000"]

@@ -200,7 +200,10 @@ setsid nohup python run.py viewer >data/_logs/viewer.log 2>&1 &     # chạy n�
 ```
 
 Tổng quan theo nguồn, lọc/xem sản phẩm kèm ảnh, giá, tồn kho, lịch sử giá, review; duyệt từng bảng gold; ô SQL chỉ đọc
-(thêm bảng `pl`: một dòng mỗi sản phẩm với giá mới nhất). Trang tự nạp lại khi pipeline ghi gold mới. Mặc định chỉ nghe
+(thêm bảng `pl`: một dòng mỗi sản phẩm với giá mới nhất). Tab "Tìm bằng ảnh": tải/kéo thả/dán ảnh hoặc gõ mô tả, chọn vùng
+món đồ phát hiện được (thân trên/thân dưới/chân), lọc nguồn/nhóm/giá/còn hàng; nút "Tìm sản phẩm giống" trong trang chi tiết.
+Viewer chuyển yêu cầu sang coordinator (`SEARCH_COORDINATOR`, mặc định `http://127.0.0.1:18700`, xem "Tìm kiếm phân tán"),
+nên tab này cần cụm node và coordinator đang chạy; các tab khác không cần. Trang tự nạp lại khi pipeline ghi gold mới. Mặc định chỉ nghe
 `127.0.0.1`; từ máy khác dùng `ssh -L 8770:localhost:8770 <máy>` (VS Code Remote tự chuyển cổng).
 
 ### Chạy nền bằng cron (sống sót khi ngắt SSH)
@@ -217,6 +220,89 @@ scripts/install_cron.sh            # cài khối cron (chạy lại an toàn); -
 Lịch chồng lên lần đang chạy thì tự bỏ qua (khoá `data/_agents/locks/`; crawl và xử lý khoá riêng nên chạy song song được).
 Log: `data/_logs/cron_pipeline_<ngày>.log` (giữ 14 ngày) và `data/_logs/agents_<run>_crawl_<nguồn>.log`. Chạy thủ công
 không cần giữ phiên SSH: `setsid nohup scripts/cron_pipeline.sh --stages crawl >/dev/null 2>&1 &`.
+
+## Tìm kiếm ảnh (`src/search/`)
+
+Chạy trên bộ mẫu `data/sample`, env riêng có torch + CUDA (`requirements-search.txt`):
+
+```bash
+uv venv --python 3.11 .venv-search
+VIRTUAL_ENV=.venv-search uv pip install --index-strategy unsafe-best-match -r requirements-search.txt   # hoặc pip install -r
+.venv-search/bin/python run.py search embed                      # embedding mọi ảnh, mọi model (chỉ tính sha256 còn thiếu)
+.venv-search/bin/python run.py search crops                      # phát hiện món đồ + embedding vùng cắt + thí nghiệm
+.venv-search/bin/python run.py search eval                       # so sánh model
+.venv-search/bin/python run.py search query --image anh.jpg      # tìm bằng ảnh: ảnh gốc + mọi vùng phát hiện được
+.venv-search/bin/python run.py search query --image anh.jpg --region lower --source tiki zara --price-max 500000
+.venv-search/bin/python run.py search query --text "áo khoác jean nam" --category-l1 outerwear
+.venv-search/bin/python run.py search query --selfcheck         # chạy lại đánh giá khác góc qua chỉ mục FAISS
+```
+
+Lưu trữ theo lakehouse: embedding và kết quả phát hiện là bảng đặc trưng tầng gold, khoá theo sha256 của file ảnh (khớp
+`fact_media.sha256` của kho media theo nội dung), nên bộ mẫu và bộ đầy đủ dùng chung, ảnh đã tính không tính lại. Chỉ mục FAISS
+không được lưu: nó dựng lại từ các file này khi khởi động (dưới 1 giây với bộ mẫu). `gold.duckdb` có view cho các bảng này
+(`GoldAgent` giữ lại khi dựng lại catalog), vector là `FLOAT[dim]` nên truy vấn được bằng `array_cosine_similarity`.
+
+| Đường dẫn (`data/lakehouse/gold/`) | View trong `gold.duckdb` | Nội dung |
+|---|---|---|
+| `embeddings/model=<tên>/data.parquet` | `feat_image_<tên>` | sha256 → vector ảnh gốc, `model_version` |
+| `embeddings_crops/model=<tên>/data.parquet` | `feat_crop_<tên>` | `<sha256>#<upper\|lower\|feet>` → vector vùng cắt |
+| `detections/grounding_dino_tiny/data.parquet` | `fact_garment_detection` | khung món đồ (chuẩn hoá [0, 1]), nhãn, điểm |
+
+Báo cáo đánh giá ghi vào `data/reports/search/<thời điểm>/`.
+
+| File | Việc |
+|---|---|
+| `catalog.py` | đường dẫn kho; đọc ảnh và sản phẩm bộ mẫu; view cho `gold.duckdb` |
+| `encoders.py` | `dinov2_b14`, `siglip2_b16`, `fashion_siglip` (Marqo), `clip_b32`: ảnh/văn bản → vector L2-normalize |
+| `embed.py` | kho embedding theo nội dung (chỉ tính phần thiếu) |
+| `crops.py` | phát hiện món đồ (Grounding DINO tiny), gom vùng thân trên/thân dưới/chân, embedding vùng cắt, so 5 biến thể |
+| `garments.py` | nhóm món đồ, gom khung theo vùng, cắt ảnh (không cần torch) |
+| `shard.py` | chỉ mục FAISS `IndexFlatIP` (chính xác) của một phần dữ liệu, gộp điểm theo sản phẩm, lọc nguồn/danh mục/đối tượng/giá/còn hàng (không cần torch) |
+| `engine.py` | phía truy vấn (`QueryEncoder`: phát hiện món đồ + embedding) và tìm kiếm tập trung (`SearchEngine`) |
+| `evaluate.py` | đánh giá: khác góc, biến dạng, văn bản → ảnh, độ trễ; KTC 95% bootstrap theo sản phẩm |
+
+Điểm sản phẩm = cặp (vector truy vấn, vector của sản phẩm) giống nhất. Mỗi vector truy vấn lấy `k × vmax` vector đầu (vmax =
+số vector nhiều nhất của một sản phẩm) là đủ để top-k sản phẩm chính xác tuyệt đối; bộ lọc chạy trong FAISS qua `IDSelector`.
+
+Không có nhãn "cùng sản phẩm" từ ngoài, nên bộ đánh giá lấy từ chính dữ liệu: 400 sản phẩm (brands, tiki, uniqlo, zara) có
+2–4 ảnh khác góc; mỗi ảnh làm truy vấn (bỏ chính nó khỏi kho), đúng khi tìm ra sản phẩm của nó. H&M và Shopee (1 ảnh/sản phẩm)
+chỉ nằm trong kho làm nhiễu. Kết quả trên bộ mẫu (R@1 sản phẩm, khác góc): `fashion_siglip` 78,4% > `siglip2_b16` 71,4% >
+`clip_b32` 51,4% > `dinov2_b14` 47,8%; văn bản → ảnh (R@10): `siglip2_b16` 81% (tiếng Việt tốt nhất) > `fashion_siglip` 66%.
+Vì vậy dùng `fashion_siglip` cho truy vấn ảnh và `siglip2_b16` cho truy vấn văn bản. Nhãn có nhiễu (màu khác nhau của cùng
+sản phẩm Uniqlo, tin trùng giữa seller Tiki, ảnh rác) nên con số là cận dưới.
+
+Ảnh người mặc thường có nhiều món đồ (một nửa số truy vấn). Thêm vùng cắt cả ở kho (vùng khớp danh mục sản phẩm) lẫn ở
+truy vấn (mọi vùng phát hiện được, không dùng danh mục), điểm = cặp vector giống nhất: `fashion_siglip` R@1 78,4% → 82,7%
+(+4,4 điểm, KTC 95% [2,5; 6,4]), `siglip2_b16` 71,4% → 76,8%.
+
+### Tìm kiếm phân tán
+
+Phân mảnh theo nguồn (mỗi nguồn là một cửa hàng/hệ thống bán; một sản phẩm thuộc đúng một nguồn). Node chỉ giữ chỉ mục FAISS
+của phần mình, không cần torch/GPU: coordinator (trên host, có GPU) phát hiện món đồ và tính vector một lần, gửi song song tới
+mọi node (vector float32 dạng base64), gộp top-k của từng node thành top-k toàn cục. Mỗi node trả top-k chính xác của nó và
+mỗi sản phẩm ở đúng một node, nên kết quả gộp y hệt tìm trên một chỉ mục chung.
+
+```bash
+docker compose -f ../docker-compose.search.yml --profile n3 up -d --build --wait   # n1 | n3 | n6 (lake/src/search/topology.py)
+.venv-search/bin/python run.py search coordinator --topology n3                   # http://127.0.0.1:18700
+curl -F file=@anh.jpg -F k=10 -F 'filters={"source":["tiki"]}' 127.0.0.1:18700/search/image
+curl -H 'content-type: application/json' -d '{"text":"áo khoác jean nam"}' 127.0.0.1:18700/search/text
+docker compose -f ../docker-compose.search.yml stop node-b                         # kịch bản node lỗi
+.venv-search/bin/python run.py search bench     # E1 chính xác, E2 độ trễ 1/3/6 node, E3 node chết/chậm → data/reports/search/
+```
+
+| Thành phần | File | Ghi chú |
+|---|---|---|
+| Node | `node.py`, `shard.py` | `/health`, `/search`; từ chối vector khác `model_version` (409); `NODE_DELAY_MS` giả lập node chậm |
+| Coordinator | `coordinator.py` | `/search/image`, `/search/text`, `/search/vectors`, `/health`, `/stats`; kiểm tra đầu vào (k ≤ 100, kiểu bộ lọc, ảnh ≤ 15 MB và ≤ 40 MP); timeout không thử lại, lỗi kết nối thử lại 1 lần; cầu dao theo node (3 lỗi liên tiếp → mở; sau 10 s và health check qua → nửa mở cho 1 truy vấn thử; lỗi 4xx do truy vấn không tính); cache LRU (không lưu kết quả thiếu node) |
+| Hạ tầng | `../docker-compose.search.yml`, `deploy/search/Dockerfile.node` | image node ~550 MB, code và dữ liệu gắn read-only; cổng `127.0.0.1:187xx` |
+
+Kết quả trả về có `partial` (thiếu node nào) và trạng thái từng node (`ok`, `error`, `timeout`, `bad_response`, `rejected`,
+`circuit_open`, `version_mismatch`). `model_version` (tên model + commit trọng số) đi kèm mọi vector: node từ chối vector khác
+phiên bản chỉ mục của mình, và `embed`/`crops` không ghi thêm vào kho tính bằng phiên bản khác (xoá thư mục `model=<tên>` để tính lại).
+
+Hạn chế đã biết: truy vấn văn bản tiếng Việt ngắn do người gõ ("giày sneaker trắng") kém hơn hẳn tiếng Anh ("white sneakers");
+đánh giá văn bản ở trên dùng tên sản phẩm (dài, sát tiêu đề) nên không thấy điều này.
 
 ## Airflow
 

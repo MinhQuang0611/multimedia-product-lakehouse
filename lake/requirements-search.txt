@@ -1,0 +1,23 @@
+# Môi trường riêng cho tìm kiếm ảnh (src/search/): tách khỏi env crawl/pipeline vì cần torch + CUDA.
+# uv venv --python 3.11 .venv-search && VIRTUAL_ENV=.venv-search uv pip install --index-strategy unsafe-best-match -r requirements-search.txt
+# (uv mặc định chỉ lấy một gói từ index đầu tiên có nó; index PyTorch có pillow nhưng không có bản cần. pip không cần cờ này.)
+# torch >= 2.6: transformers 4.57 từ chối nạp trọng số .bin (CLIP) với torch cũ hơn (CVE-2025-32434).
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0
+torchvision==0.21.0
+transformers==4.57.6
+open-clip-torch==3.3.0
+timm==1.0.30
+sentencepiece==0.2.2
+protobuf==7.36.2
+faiss-cpu==1.15.1
+# Cùng phiên bản với env pipeline: gold.duckdb do hai env cùng ghi, DuckDB mới hơn có thể ghi định dạng bản cũ không mở được.
+duckdb==1.5.6
+pydantic-settings==2.16.1
+pyarrow==26.0.0
+numpy==2.4.6
+pillow==13.0.0
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+python-multipart==0.0.32

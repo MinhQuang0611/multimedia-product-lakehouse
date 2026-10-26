@@ -1,8 +1,12 @@
+import http.client
 import json
 import math
 import mimetypes
+import os
 import re
 import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -23,6 +27,8 @@ LIST_COLS = ("product_key, source, name, brand_name, category_l1, category_l2, c
              "price, original_price, price_currency, price_vnd, discount_pct, in_stock, img_local, image_url, n_images")
 READ_ONLY = re.compile(r"^\s*(select|with|from|describe|show|explain|summarize)\b", re.I)
 MAX_SQL_ROWS = 1000
+SEARCH_URL = os.environ.get("SEARCH_COORDINATOR", "http://127.0.0.1:18700")  # run.py search coordinator
+MAX_UPLOAD = 15 * 1024**2
 
 CON: duckdb.DuckDBPyConnection
 
@@ -141,6 +147,22 @@ def json_safe(o):
     return str(o)
 
 
+def proxy(path: str, body: bytes | None = None, ctype: str | None = None, timeout: float = 60) -> tuple[int, bytes]:
+    """Chuyển yêu cầu tìm kiếm sang coordinator (env riêng có GPU); trình duyệt chỉ nói chuyện với viewer."""
+    req = urllib.request.Request(SEARCH_URL + path, data=body, headers={"Content-Type": ctype} if ctype else {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+    except (http.client.HTTPException, ConnectionError) as e:  # coordinator đứt giữa chừng khi đang trả lời
+        return 502, json.dumps({"error": f"coordinator trả lời dở dang ({e.__class__.__name__})"}, ensure_ascii=False).encode()
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        msg = (f"Không gọi được coordinator {SEARCH_URL} ({getattr(e, 'reason', e)}). Chạy: "
+               "docker compose -f docker-compose.search.yml --profile n3 up -d && python run.py search coordinator")
+        return 503, json.dumps({"error": msg}, ensure_ascii=False).encode()
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *a):
         pass
@@ -167,6 +189,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(204, b"", "image/x-icon")
             if u.path == "/img":
                 return self.image((q.get("p") or [""])[0])
+            if u.path == "/api/search/health":
+                code, body = proxy("/health", timeout=3)
+                return self.send(code, body, "application/json; charset=utf-8")
             cur = CON.cursor()
             if u.path == "/api/overview":
                 return self.send_json(overview(cur))
@@ -182,10 +207,30 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": str(e)}, 500)
 
     def do_POST(self):
-        if urlparse(self.path).path != "/api/sql":
+        path = urlparse(self.path).path
+        # Thiếu/âm/sai Content-Length thì rfile.read(n) đọc tới hết kết nối: treo luồng và không giới hạn bộ nhớ.
+        try:
+            n = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            n = -1
+        if n < 0:
+            return self.send_json({"error": "thiếu hoặc sai Content-Length"}, 411)
+        if path in ("/api/search/image", "/api/search/text"):
+            if n > MAX_UPLOAD:
+                # Đọc bỏ phần thân trước khi trả lỗi: đóng khi client còn đang gửi thì trình duyệt chỉ thấy lỗi mạng.
+                if n <= 8 * MAX_UPLOAD:
+                    left = n
+                    while left > 0 and (chunk := self.rfile.read(min(1024**2, left))):
+                        left -= len(chunk)
+                else:
+                    self.close_connection = True
+                return self.send_json({"error": f"ảnh quá lớn (> {MAX_UPLOAD // 1024**2} MB)"}, 413)
+            code, body = proxy(path.removeprefix("/api"), self.rfile.read(n), self.headers.get("Content-Type"))
+            return self.send(code, body, "application/json; charset=utf-8")
+        if path != "/api/sql":
             return self.send(404, b"not found", "text/plain")
         try:
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            body = json.loads(self.rfile.read(n) or b"{}")
             self.send_json(run_sql(CON.cursor(), body.get("sql", "")))
         except Exception as e:
             self.send_json({"error": str(e)}, 500)

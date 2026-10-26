@@ -3,6 +3,7 @@ import shutil
 import duckdb
 
 from src.common.core import S, Agent, Context, Task, layer, swap_dir
+from src.search.catalog import feature_views
 
 SOURCE_INFO = [  # source, tên, loại, quốc gia, loại dữ liệu
     ("tiki", "Tiki", "marketplace", "VN", "product,variant,image,review,seller,category"),
@@ -187,4 +188,7 @@ class GoldAgent(Agent):
         con = duckdb.connect(str(db))
         for t in tables:
             con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{(layer('gold', t) / 'data.parquet').as_posix()}')")
+        # Embedding/phát hiện món đồ do src/search ghi (env riêng): giữ lại trong catalog khi gold dựng lại file này.
+        for name, sql in feature_views().items():
+            con.execute(f"CREATE VIEW {name} AS {sql}")
         con.close()
