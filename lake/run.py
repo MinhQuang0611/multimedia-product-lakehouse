@@ -22,6 +22,13 @@ def main() -> None:
 
         serve(a.host, a.port)
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "search":
+        # Nạp module khi cần: node không cần torch, các lệnh còn lại thì cần.
+        cmds = {"embed": "embed", "eval": "evaluate", "crops": "crops", "query": "engine", "node": "node",
+                "coordinator": "coordinator", "bench": "bench"}
+        if len(sys.argv) < 3 or sys.argv[2] not in cmds:
+            sys.exit(f"dùng: python run.py search {{{'|'.join(cmds)}}} [--help]")
+        sys.exit(importlib.import_module(f"src.search.{cmds[sys.argv[2]]}").main(sys.argv[3:]))
     if len(sys.argv) > 1 and sys.argv[1] == "pipeline":
         from src.orchestrator.cli import main as pipeline
 
